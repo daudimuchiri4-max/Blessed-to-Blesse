@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from "firebase/auth";
-import { auth, googleProvider } from "../firebase";
+import { auth, googleProvider, db } from "../firebase";
+import { collection, getDocs, limit, query } from "firebase/firestore";
 import { 
   LogIn, 
   UserPlus, 
@@ -13,6 +14,7 @@ import {
   Lock, 
   CheckCircle2, 
   ChevronDown, 
+  Landmark,
   Activity,
   Award,
   ChevronLeft,
@@ -40,6 +42,27 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [showAuthGuide, setShowAuthGuide] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Group metadata states loaded dynamically from DB
+  const [chamaName, setChamaName] = useState("Blessed to Bless");
+  const [chamaLogo, setChamaLogo] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchChamaInfo = async () => {
+      try {
+        const q = query(collection(db, "chamas"), limit(1));
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty) {
+          const docData = querySnapshot.docs[0].data();
+          if (docData.name) setChamaName(docData.name);
+          if (docData.logoURL) setChamaLogo(docData.logoURL);
+        }
+      } catch (err) {
+        console.error("Failed to fetch chama info on landing page:", err);
+      }
+    };
+    fetchChamaInfo();
+  }, []);
 
   // FAQ accordion states
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
@@ -199,12 +222,20 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
       {/* Header / Brand Navigation */}
       <header className="relative z-20 w-full max-w-7xl mx-auto px-6 py-5 flex items-center justify-between border-b border-slate-100">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 shadow-sm">
-            <Users className="w-5 h-5" />
-          </div>
+          {chamaLogo ? (
+            <img 
+              src={chamaLogo} 
+              alt="Cooperative Logo" 
+              className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white p-0.5 shadow-sm" 
+            />
+          ) : (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 shadow-sm">
+              <Users className="w-5 h-5" />
+            </div>
+          )}
           <div>
             <h1 className="text-lg font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              Blessed to Bless <span className="text-[10px] bg-emerald-50 text-emerald-600 font-mono border border-emerald-100 px-2 py-0.5 rounded-md uppercase">SHG Ledger</span>
+              {chamaName} <span className="text-[10px] bg-emerald-50 text-emerald-600 font-mono border border-emerald-100 px-2 py-0.5 rounded-md uppercase">SHG Ledger</span>
             </h1>
             <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">Mutual Cooperation & Development</p>
           </div>
@@ -762,9 +793,17 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
       <footer className="relative z-10 w-full border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm">
         <div className="max-w-7xl w-full mx-auto px-6 py-5 flex flex-col md:flex-row items-center justify-between gap-4 text-xs font-mono text-slate-400">
           <div className="flex items-center gap-2.5">
-            <div className="p-1.5 bg-emerald-50 border border-emerald-100 rounded-lg text-emerald-600 shrink-0 shadow-xs">
-              <Users className="w-3.5 h-3.5" />
-            </div>
+            {chamaLogo ? (
+              <img 
+                src={chamaLogo} 
+                alt="Cooperative Logo" 
+                className="w-6 h-6 rounded object-cover border border-slate-200 bg-white shadow-xs shrink-0" 
+              />
+            ) : (
+              <div className="p-1.5 bg-emerald-50 border border-emerald-100 rounded-lg text-emerald-600 shrink-0 shadow-xs">
+                <Users className="w-3.5 h-3.5" />
+              </div>
+            )}
             <div>
               Copyright ©DaveTech Solutions 2026| All Rights Reserved
             </div>

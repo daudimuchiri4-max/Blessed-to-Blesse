@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { onAuthStateChanged, signOut, User, signInAnonymously, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, onSnapshot, collection, query, where, getDocs, deleteDoc } from "firebase/firestore";
 import { auth, db, googleProvider } from "./firebase";
@@ -101,6 +101,9 @@ export default function App() {
   // Profile settings inputs
   const [profileName, setProfileName] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // File input Ref for cross-platform reliability on mobile devices
+  const logoFileInputRef = useRef<HTMLInputElement>(null);
 
   // Auth subscriber
   useEffect(() => {
@@ -653,15 +656,20 @@ export default function App() {
 
                     <div className="flex-1 space-y-2">
                       <div className="flex items-center gap-2">
-                        <label className="bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white px-3 py-2 rounded-lg text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => logoFileInputRef.current?.click()}
+                          className="bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white px-3 py-2 rounded-lg text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
+                        >
                           <Upload className="w-3.5 h-3.5" /> Upload Image
-                          <input 
-                            type="file" 
-                            accept="image/*" 
-                            onChange={handleLogoUpload} 
-                            className="hidden" 
-                          />
-                        </label>
+                        </button>
+                        <input 
+                          type="file" 
+                          ref={logoFileInputRef}
+                          accept="image/*" 
+                          onChange={handleLogoUpload} 
+                          className="hidden" 
+                        />
                         {groupLogoBase64 && (
                           <button
                             type="button"
