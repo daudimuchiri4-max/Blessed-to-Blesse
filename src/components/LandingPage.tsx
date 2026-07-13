@@ -23,7 +23,9 @@ import {
   QrCode,
   Copy,
   Check,
-  X
+  X,
+  Smartphone,
+  Download
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -42,6 +44,48 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [showAuthGuide, setShowAuthGuide] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // PWA Installation state
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [installStatus, setInstallStatus] = useState<"idle" | "installing" | "installed">("idle");
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+
+    // Check if running as standalone PWA
+    if (window.matchMedia("(display-mode: standalone)").matches || (navigator as any).standalone) {
+      setInstallStatus("installed");
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (deferredPrompt) {
+      try {
+        await deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        console.log(`User choice outcome: ${outcome}`);
+        setDeferredPrompt(null);
+        setIsInstallable(false);
+        setShowInstallModal(false);
+      } catch (err) {
+        console.error("Installation prompt failed:", err);
+      }
+    } else {
+      setShowInstallModal(true);
+    }
+  };
 
   // Group metadata states loaded dynamically from DB
   const [chamaName, setChamaName] = useState("Blessed to Bless");
@@ -250,15 +294,22 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
           <a href="#faq" className="hover:text-emerald-600 transition-colors">FAQ</a>
         </nav>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
+          <button
+            onClick={handleInstallApp}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm shadow-emerald-600/10"
+          >
+            <Download className="w-4 h-4" />
+            <span>Install App</span>
+          </button>
           <button
             onClick={() => setShowShareModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-[#1D4ED8] rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm"
+            className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-blue-600 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm"
           >
-            <Share2 className="w-4 h-4 text-[#059669]" />
-            <span>Share App</span>
+            <Share2 className="w-4 h-4 text-emerald-600" />
+            <span className="hidden sm:inline">Share App</span>
           </button>
-          <div className="text-[10px] text-slate-400 font-mono hidden sm:block">
+          <div className="text-[10px] text-slate-400 font-mono hidden md:block">
             STATUS: <span className="text-emerald-600 font-bold">● ONLINE</span>
           </div>
         </div>
@@ -909,6 +960,91 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                   className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer transition-colors"
                 >
                   Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Install App Modal */}
+      <AnimatePresence>
+        {showInstallModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-5 relative shadow-xl text-slate-800"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-bold text-emerald-700 flex items-center gap-2">
+                  <Smartphone className="w-5 h-5 text-emerald-600" /> Install Cooperative App
+                </h3>
+                <button 
+                  onClick={() => setShowInstallModal(false)}
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-center py-2">
+                  {chamaLogo ? (
+                    <img 
+                      src={chamaLogo} 
+                      alt="Logo" 
+                      className="w-16 h-16 rounded-2xl object-cover border border-slate-200 shadow-md p-1 bg-white" 
+                    />
+                  ) : (
+                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl text-emerald-600 shadow-md">
+                      <Users className="w-8 h-8" />
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-500 leading-relaxed text-center">
+                  Install <strong className="text-slate-800">{chamaName}</strong> as a standalone application on your device for fast access, offline availability, and full screen experience.
+                </p>
+
+                {/* Tabs / Device Selector */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider font-mono">
+                    Installation Guide
+                  </h4>
+                  
+                  <div className="space-y-2.5 text-xs text-slate-600">
+                    <div className="flex items-start gap-2.5">
+                      <span className="flex items-center justify-center w-5 h-5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px] shrink-0 mt-0.5">1</span>
+                      <div>
+                        <strong className="text-slate-800">For Apple Devices (iOS/Safari)</strong>: Tap the <span className="bg-slate-200 px-1.5 py-0.5 rounded font-mono font-bold inline-flex items-center gap-1"><Share2 className="w-3 h-3 text-emerald-600 inline" /> Share</span> icon in Safari, scroll down and tap <strong className="text-slate-800">"Add to Home Screen"</strong>.
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="flex items-center justify-center w-5 h-5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px] shrink-0 mt-0.5">2</span>
+                      <div>
+                        <strong className="text-slate-800">For Android Devices (Chrome)</strong>: Tap the three dots <strong className="text-slate-800">⋮</strong> menu in the upper right, and tap <strong className="text-slate-800">"Install app"</strong> or <strong className="text-slate-800">"Add to Home screen"</strong>.
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="flex items-center justify-center w-5 h-5 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[10px] shrink-0 mt-0.5">3</span>
+                      <div>
+                        <strong className="text-slate-800">For Desktop Browser (Chrome/Edge)</strong>: Click the install icon in the address bar (next to bookmark star) to download the app onto your computer.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
+                <span className="text-[10px] text-slate-400 font-mono">SECURE PW_LEDGER v1.0</span>
+                <button
+                  type="button"
+                  onClick={() => setShowInstallModal(false)}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors"
+                >
+                  Got It
                 </button>
               </div>
             </motion.div>

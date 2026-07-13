@@ -1,0 +1,24 @@
+{
+  "name": "Blessed to Bless SHG Ledger",
+  "short_name": "SHG Ledger",
+  "description": "Blessed to Bless Self Help Group Ledger - Track group savings, contributions, investments, and micro-loans.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#10b981",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512",
+      "purpose": "any"
+    }
+  ]
+}
