@@ -21,7 +21,11 @@ import {
   Settings, 
   Upload, 
   Trash2, 
-  X 
+  X,
+  Share2,
+  QrCode,
+  Copy,
+  Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -83,6 +87,8 @@ export default function App() {
   // Modal states
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [showProfileSettings, setShowProfileSettings] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Group settings inputs
   const [groupName, setGroupName] = useState("");
@@ -174,6 +180,25 @@ export default function App() {
       setGroupLogoBase64(selectedChama.logoURL || null);
     }
   }, [selectedChama?.id]);
+
+  // Dynamic favicon updater based on selected Chama's logo
+  useEffect(() => {
+    let faviconUrl = "";
+    if (selectedChama && selectedChama.logoURL) {
+      faviconUrl = selectedChama.logoURL;
+    } else {
+      // Default SVG favicon
+      faviconUrl = `data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>👥</text></svg>`;
+    }
+
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.getElementsByTagName('head')[0].appendChild(link);
+    }
+    link.href = faviconUrl;
+  }, [selectedChama?.logoURL]);
 
   // Sync profile settings name input when memberRecord loads or updates
   useEffect(() => {
@@ -475,6 +500,15 @@ export default function App() {
                 Link Google
               </button>
             )}
+            <button
+              onClick={() => setShowShareModal(true)}
+              className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-emerald-500/40 hover:text-emerald-400 text-slate-450 hover:bg-slate-950 transition-all cursor-pointer flex items-center gap-1.5"
+              title="Share app with QR code"
+            >
+              <Share2 className="w-4 h-4" />
+              <span className="text-[10px] font-bold font-sans hidden sm:inline uppercase tracking-wider">Share App</span>
+            </button>
+
             <button
               onClick={handleLogout}
               className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-red-950/40 hover:text-red-400 text-slate-450 hover:bg-slate-950 transition-all cursor-pointer"
@@ -794,15 +828,129 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Share App Modal (QR Code & Quick Copy Link) */}
+      <AnimatePresence>
+        {showShareModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-5 relative shadow-xl text-slate-800"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-bold text-[#1D4ED8] flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-emerald-600" /> Share Cooperative App
+                </h3>
+                <button 
+                  onClick={() => setShowShareModal(false)}
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-center">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Invite members and leaders to join <strong className="text-slate-800">{selectedChama.name}</strong>. Scan the QR code below or copy the portal URL to send it directly!
+                </p>
+
+                {/* QR Code Container */}
+                <div className="flex flex-col items-center justify-center p-4 bg-slate-50 rounded-xl border border-slate-100 max-w-[280px] mx-auto">
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(window.location.origin)}`}
+                    alt="App QR Code"
+                    className="w-[180px] h-[180px] rounded-lg shadow-sm border border-slate-200 bg-white p-2"
+                  />
+                  <span className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-2.5 flex items-center gap-1.5">
+                    <QrCode className="w-3 h-3 text-slate-400" /> scan with mobile camera
+                  </span>
+                </div>
+
+                {/* URL Copy Container */}
+                <div className="space-y-1.5 text-left">
+                  <label className="text-xs text-slate-500 font-mono">Cooperative Access Link</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={window.location.origin}
+                      className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 focus:outline-none select-all font-mono"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(window.location.origin);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="px-4 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" /> Copied!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" /> Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Native share option if supported */}
+                {typeof navigator !== "undefined" && navigator.share && (
+                  <button
+                    onClick={() => {
+                      navigator.share({
+                        title: selectedChama.name,
+                        text: `Join ${selectedChama.name} on the Blessed to Bless Cooperative Applet!`,
+                        url: window.location.origin,
+                      }).catch(console.error);
+                    }}
+                    className="w-full py-2.5 bg-[#059669] hover:bg-[#10B981] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm"
+                  >
+                    <Share2 className="w-4 h-4" /> Share to other Apps
+                  </button>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowShareModal(false)}
+                  className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Dynamic Status Bar Footer */}
       <footer className="w-full border-t border-slate-900 bg-slate-950/80 backdrop-blur-sm relative z-10">
         <div className="max-w-7xl w-full mx-auto px-6 py-3 flex items-center justify-between gap-4 text-[10px] font-mono text-slate-500">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>SECURE REAL-TIME DATA REPLICA</span>
+          <div className="flex items-center gap-3">
+            {selectedChama.logoURL ? (
+              <img 
+                src={selectedChama.logoURL} 
+                alt="Logo" 
+                className="w-4 h-4 rounded object-cover border border-slate-800 bg-slate-900" 
+              />
+            ) : (
+              <Landmark className="w-4 h-4 text-emerald-500" />
+            )}
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>SECURE REAL-TIME DATA REPLICA</span>
+            </div>
           </div>
-          <div>
-            LEDGER_NODE_OK • {selectedChama.id.toUpperCase()}
+          <div className="flex items-center gap-2">
+            <span>LEDGER_NODE_OK • {selectedChama.id.toUpperCase()}</span>
+            <span className="hidden md:inline text-slate-700">|</span>
+            <span className="hidden md:inline">Copyright ©DaveTech Solutions 2026| All Rights Reserved</span>
           </div>
         </div>
       </footer>
