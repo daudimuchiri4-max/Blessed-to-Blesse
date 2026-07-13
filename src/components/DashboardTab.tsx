@@ -208,7 +208,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
                 {/* Total Group Money Card */}
-                <div className="p-5 bg-gradient-to-br from-emerald-950/20 to-slate-950/40 border border-emerald-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
+                <div className="card-savings p-5 bg-gradient-to-br from-emerald-950/20 to-slate-950/40 border border-emerald-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
                   <div>
                     <span className="text-[10px] font-mono text-emerald-500 uppercase tracking-wider block">Total Chama Money</span>
                     <span className="text-xs text-slate-400 mt-0.5 block">{(chama.totalSavings / (chama.sharePrice || 2000)).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})} Total Shares (@ {(chama.sharePrice || 2000).toLocaleString()} {chama.currency})</span>
@@ -223,7 +223,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
                 </div>
 
                 {/* Total Investments Card */}
-                <div className="p-5 bg-gradient-to-br from-blue-950/20 to-slate-950/40 border border-blue-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
+                <div className="card-loans p-5 bg-gradient-to-br from-blue-950/20 to-slate-950/40 border border-blue-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
                   <div>
                     <span className="text-[10px] font-mono text-blue-500 uppercase tracking-wider block">Asset Investments</span>
                     <span className="text-xs text-slate-400 mt-0.5 block">Cooperative Portfolio</span>
@@ -238,7 +238,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
                 </div>
 
                 {/* Total Members Card */}
-                <div className="p-5 bg-gradient-to-br from-indigo-950/20 to-slate-950/40 border border-indigo-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
+                <div className="card-members p-5 bg-gradient-to-br from-indigo-950/20 to-slate-950/40 border border-indigo-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between h-36">
                   <div>
                     <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-wider block">Cooperator Count</span>
                     <span className="text-xs text-slate-400 mt-0.5 block">Active Chama Trust</span>
@@ -406,7 +406,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             
             {/* Total Pool Savings */}
-            <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
+            <div className="card-savings p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-slate-500 uppercase tracking-wider">Group Savings Pool</span>
                 <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl">
@@ -426,7 +426,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
             </div>
 
             {/* Active Investments */}
-            <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
+            <div className="card-meetings p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-slate-500 uppercase tracking-wider">Active Assets</span>
                 <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl">
@@ -446,7 +446,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
             </div>
 
             {/* Outstanding Loans */}
-            <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
+            <div className="card-loans p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-slate-500 uppercase tracking-wider">Loans Outstanding</span>
                 <div className="p-2 bg-amber-500/10 text-amber-400 rounded-xl">
@@ -466,7 +466,7 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
             </div>
 
             {/* My Personal Contributions */}
-            <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
+            <div className="card-members p-6 bg-slate-900/40 border border-slate-900 rounded-2xl relative overflow-hidden flex flex-col justify-between h-40">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-slate-500 uppercase tracking-wider">My Approved Savings</span>
                 <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl">

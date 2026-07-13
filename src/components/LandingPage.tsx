@@ -341,17 +341,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                   </div>
                 )}
 
-                {/* Main Instant Session Option */}
-                <button
-                  type="button"
-                  id="btn-guest-login"
-                  onClick={handleGuestLogin}
-                  disabled={loading}
-                  className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-sm cursor-pointer text-xs flex items-center justify-center gap-2"
-                >
-                  <Sparkles className="w-3.5 h-3.5 fill-white animate-pulse" />
-                  Instant Guest Session (Live DB)
-                </button>
+
 
                 {/* Google Sign In option */}
                 <button
