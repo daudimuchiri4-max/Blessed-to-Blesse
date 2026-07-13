@@ -950,15 +950,10 @@ export default function App() {
             ) : (
               <Landmark className="w-4 h-4 text-emerald-500" />
             )}
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>SECURE REAL-TIME DATA REPLICA</span>
-            </div>
+            <span>{selectedChama.name} Portal</span>
           </div>
           <div className="flex items-center gap-2">
-            <span>LEDGER_NODE_OK • {selectedChama.id.toUpperCase()}</span>
-            <span className="hidden md:inline text-slate-700">|</span>
-            <span className="hidden md:inline">Copyright ©DaveTech Solutions 2026| All Rights Reserved</span>
+            <span className="hidden md:inline">Copyright ©DaveTech Solutions 2026 | All Rights Reserved</span>
           </div>
         </div>
       </footer>
