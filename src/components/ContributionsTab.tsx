@@ -1,0 +1,1001 @@
+import React, { useState, useEffect } from "react";
+import { collection, onSnapshot, query, addDoc, doc, updateDoc, increment, getDocs, where } from "firebase/firestore";
+import { db } from "../firebase";
+import { Chama, Contribution, Member, Loan } from "../types";
+import { Plus, Check, X, Filter, DollarSign, Wallet, Calendar, AlertCircle, FileText, CheckCircle, ChevronLeft, ChevronRight, Clock, Sparkles } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+
+// Helper: Get all due dates in a given month
+const getDueDatesInMonth = (year: number, month: number, createdAtStr: string, frequency: string) => {
+  const dates: Date[] = [];
+  const startDate = new Date(year, month, 1);
+  const endDate = new Date(year, month + 1, 0); // Last day of month
+  const creationDate = createdAtStr ? new Date(createdAtStr) : new Date(2026, 0, 1);
+  
+  if (frequency === "weekly") {
+    const dueDayOfWeek = isNaN(creationDate.getTime()) ? 0 : creationDate.getDay();
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      if (d.getDay() === dueDayOfWeek) {
+        dates.push(new Date(d));
+      }
+    }
+  } else if (frequency === "monthly") {
+    const dueDayOfMonth = isNaN(creationDate.getTime()) ? 1 : creationDate.getDate();
+    const maxDays = endDate.getDate();
+    const targetDay = dueDayOfMonth > maxDays ? maxDays : dueDayOfMonth;
+    const d = new Date(year, month, targetDay);
+    if (d >= startDate && d <= endDate) {
+      dates.push(d);
+    }
+  } else {
+    // custom (fortnightly = 14 days)
+    if (!isNaN(creationDate.getTime())) {
+      const baseDate = new Date(creationDate.getFullYear(), creationDate.getMonth(), creationDate.getDate());
+      const firstOfMonth = new Date(year, month, 1);
+      const lastOfMonth = new Date(year, month + 1, 0);
+      
+      const diffTime = firstOfMonth.getTime() - baseDate.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      let k = Math.floor(diffDays / 14);
+      if (k < 0) k = 0;
+      
+      let currentOccur = new Date(baseDate.getTime() + k * 14 * 24 * 60 * 60 * 1000);
+      while (currentOccur <= lastOfMonth) {
+        if (currentOccur >= firstOfMonth) {
+          dates.push(new Date(currentOccur));
+        }
+        k++;
+        currentOccur = new Date(baseDate.getTime() + k * 14 * 24 * 60 * 60 * 1000);
+      }
+    } else {
+      dates.push(new Date(year, month, 1));
+      dates.push(new Date(year, month, 15));
+    }
+  }
+  return dates;
+};
+
+// Helper: Check if a date is a due date
+const isDueDate = (date: Date, createdAtStr: string, frequency: string) => {
+  const creationDate = createdAtStr ? new Date(createdAtStr) : new Date(2026, 0, 1);
+  if (isNaN(creationDate.getTime())) return false;
+
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const c = new Date(creationDate.getFullYear(), creationDate.getMonth(), creationDate.getDate());
+
+  if (d < c) return false;
+
+  if (frequency === "weekly") {
+    return d.getDay() === c.getDay();
+  } else if (frequency === "monthly") {
+    const targetDay = c.getDate();
+    const lastDayOfDMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const dueDay = targetDay > lastDayOfDMonth ? lastDayOfDMonth : targetDay;
+    return d.getDate() === dueDay;
+  } else {
+    const diffTime = d.getTime() - c.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 && diffDays % 14 === 0;
+  }
+};
+
+// Helper: Calculate 42-day calendar grid
+const getDaysInMonthGrid = (year: number, month: number) => {
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const numDays = new Date(year, month + 1, 0).getDate();
+  const grid = [];
+  
+  const prevMonthNumDays = new Date(year, month, 0).getDate();
+  for (let i = firstDayIndex - 1; i >= 0; i--) {
+    grid.push({
+      day: prevMonthNumDays - i,
+      month: month === 0 ? 11 : month - 1,
+      year: month === 0 ? year - 1 : year,
+      isCurrentMonth: false
+    });
+  }
+  
+  for (let i = 1; i <= numDays; i++) {
+    grid.push({
+      day: i,
+      month: month,
+      year: year,
+      isCurrentMonth: true
+    });
+  }
+  
+  const remaining = 42 - grid.length;
+  for (let i = 1; i <= remaining; i++) {
+    grid.push({
+      day: i,
+      month: month === 11 ? 0 : month + 1,
+      year: month === 11 ? year + 1 : year,
+      isCurrentMonth: false
+    });
+  }
+  
+  return grid;
+};
+
+// Helper: Determine member payment status for a specific due date
+const getMemberPaymentStatusForDueDate = (
+  memberId: string, 
+  dueDate: Date, 
+  frequency: string, 
+  contributions: Contribution[]
+) => {
+  const start = new Date(dueDate);
+  const end = new Date(dueDate);
+  end.setHours(23, 59, 59, 999);
+  
+  if (frequency === "weekly") {
+    start.setDate(start.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+  } else if (frequency === "monthly") {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+  } else {
+    start.setDate(start.getDate() - 13);
+    start.setHours(0, 0, 0, 0);
+  }
+
+  const memberContribs = contributions.filter(c => {
+    const isSameUser = c.userId === memberId;
+    if (!isSameUser) return false;
+    
+    const cDate = new Date(c.date);
+    return cDate >= start && cDate <= end;
+  });
+
+  if (memberContribs.length === 0) {
+    return { status: "unpaid" as const, amount: 0, contrib: null };
+  }
+
+  const approved = memberContribs.find(c => c.status === "approved");
+  if (approved) {
+    return { status: "approved" as const, amount: approved.amount, contrib: approved };
+  }
+
+  const pending = memberContribs.find(c => c.status === "pending");
+  if (pending) {
+    return { status: "pending" as const, amount: pending.amount, contrib: pending };
+  }
+
+  return { status: "rejected" as const, amount: memberContribs[0].amount, contrib: memberContribs[0] };
+};
+
+interface ContributionsTabProps {
+  chama: Chama;
+  currentUserId: string;
+  memberRole: Member["role"] | null;
+  currentUserDisplayName: string;
+}
+
+export default function ContributionsTab({ chama, currentUserId, memberRole, currentUserDisplayName }: ContributionsTabProps) {
+  const [contributions, setContributions] = useState<Contribution[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Filter states
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Sub-tab selection: calendar vs ledger
+  const [activeSubTab, setActiveSubTab] = useState<"calendar" | "ledger">("calendar");
+
+  // Calendar view states
+  const [currentYear, setCurrentYear] = useState<number>(new Date().getFullYear());
+  const [currentMonth, setCurrentMonth] = useState<number>(new Date().getMonth());
+  const [selectedDueDate, setSelectedDueDate] = useState<Date | null>(null);
+
+  // Sync selected due date when viewed month/year changes
+  useEffect(() => {
+    const dueDates = getDueDatesInMonth(currentYear, currentMonth, chama.createdAt, chama.frequency);
+    if (dueDates.length > 0) {
+      const today = new Date();
+      // Try to find the closest due date to today in the viewed month, or default to the first one
+      const closest = dueDates.find(d => d.getDate() >= today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear()) || dueDates[0];
+      setSelectedDueDate(closest);
+    } else {
+      setSelectedDueDate(null);
+    }
+  }, [currentYear, currentMonth, chama.createdAt, chama.frequency]);
+
+  // Month navigation handlers
+  const handlePrevMonth = () => {
+    if (currentMonth === 0) {
+      setCurrentMonth(11);
+      setCurrentYear(prev => prev - 1);
+    } else {
+      setCurrentMonth(prev => prev - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (currentMonth === 11) {
+      setCurrentMonth(0);
+      setCurrentYear(prev => prev + 1);
+    } else {
+      setCurrentMonth(prev => prev + 1);
+    }
+  };
+
+  // Modal / Form states
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [type, setType] = useState<Contribution["type"]>("savings");
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Member selection states
+  const [members, setMembers] = useState<Member[]>([]);
+  const [selectedMemberId, setSelectedMemberId] = useState(currentUserId);
+
+  // Only Treasurer can approve contributions
+  const isTreasurer = memberRole === "treasurer";
+
+  // Real-time subscribe to members list
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "chamas", chama.id, "members"),
+      (snapshot) => {
+        const list: Member[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as Member);
+        });
+        setMembers(list);
+      },
+      (error) => {
+        console.error("Error loading members in ContributionsTab:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [chama.id]);
+
+  // Real-time subscribe to contributions
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "chamas", chama.id, "contributions"),
+      (snapshot) => {
+        const list: Contribution[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as Contribution);
+        });
+        // Sort by date descending
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        setContributions(list);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error loading contributions:", error);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [chama.id]);
+
+  const handleRecordContribution = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      setError("Please enter a valid positive amount.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const selectedMember = members.find((m) => m.id === selectedMemberId);
+      const contributionData: Omit<Contribution, "id"> = {
+        userId: selectedMember ? (selectedMember.userId || selectedMember.id) : currentUserId,
+        memberName: selectedMember ? selectedMember.name : currentUserDisplayName,
+        amount: parsedAmount,
+        date: new Date(date).toISOString(),
+        type,
+        status: "pending",
+        notes,
+      };
+
+      await addDoc(collection(db, "chamas", chama.id, "contributions"), contributionData);
+
+      // Reset
+      setAmount("");
+      setType("savings");
+      setDate(new Date().toISOString().split("T")[0]);
+      setNotes("");
+      setSelectedMemberId(currentUserId);
+      setShowAddModal(false);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to record contribution.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApprove = async (contrib: Contribution) => {
+    try {
+      // 1. Update contribution status to approved
+      await updateDoc(doc(db, "chamas", chama.id, "contributions", contrib.id), {
+        status: "approved",
+        approvedBy: currentUserId,
+        approvedAt: new Date().toISOString(),
+      });
+
+      // 2. Increment Chama's totalSavings
+      await updateDoc(doc(db, "chamas", chama.id), {
+        totalSavings: increment(contrib.amount),
+      });
+
+      // 3. If loan repayment, find their active loan and pay it down
+      if (contrib.type === "loan_repayment") {
+        const loansRef = collection(db, "chamas", chama.id, "loans");
+        const q = query(loansRef, where("userId", "==", contrib.userId), where("status", "==", "active"));
+        const loansSnap = await getDocs(q);
+
+        if (!loansSnap.empty) {
+          const activeLoanDoc = loansSnap.docs[0];
+          const activeLoan = { id: activeLoanDoc.id, ...activeLoanDoc.data() } as Loan;
+          
+          const newRepaid = activeLoan.amountRepaid + contrib.amount;
+          const totalPayable = activeLoan.amount * (1 + activeLoan.interestRate / 100);
+
+          await updateDoc(doc(db, "chamas", chama.id, "loans", activeLoan.id), {
+            amountRepaid: increment(contrib.amount),
+            status: newRepaid >= totalPayable ? "repaid" : "active",
+          });
+
+          // Decrement outstanding Chama loan tracking
+          await updateDoc(doc(db, "chamas", chama.id), {
+            totalLoans: increment(-contrib.amount),
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Error approving contribution:", err);
+    }
+  };
+
+  const handleReject = async (contribId: string) => {
+    try {
+      await updateDoc(doc(db, "chamas", chama.id, "contributions", contribId), {
+        status: "rejected",
+        approvedBy: currentUserId,
+        approvedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Error rejecting contribution:", err);
+    }
+  };
+
+  const filteredContributions = contributions.filter((c) => {
+    const matchesType = typeFilter === "all" || c.type === typeFilter;
+    const matchesStatus = statusFilter === "all" || c.status === statusFilter;
+    return matchesType && matchesStatus;
+  });
+
+  return (
+    <div className="space-y-6 font-sans">
+      
+      {/* Header and Filter Row */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h3 className="text-xl font-bold text-white">Group Ledger Contributions</h3>
+          <p className="text-xs text-slate-500">Record payments, manage statements, and authorize deposits.</p>
+        </div>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+        >
+          <Plus className="w-4 h-4 stroke-[3]" /> Record Contribution
+        </button>
+      </div>
+
+      {/* Sub-tabs switcher */}
+      <div className="flex border-b border-slate-900 gap-6">
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("calendar")}
+          className={`pb-3 text-sm font-semibold tracking-wide transition-colors relative cursor-pointer ${
+            activeSubTab === "calendar" ? "text-emerald-400 font-bold" : "text-slate-400 hover:text-white"
+          }`}
+        >
+          📅 Compliance Calendar
+          {activeSubTab === "calendar" && (
+            <motion.div layoutId="activeSubTabUnderline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSubTab("ledger")}
+          className={`pb-3 text-sm font-semibold tracking-wide transition-colors relative cursor-pointer ${
+            activeSubTab === "ledger" ? "text-emerald-400 font-bold" : "text-slate-400 hover:text-white"
+          }`}
+        >
+          📊 Contributions Ledger
+          {activeSubTab === "ledger" && (
+            <motion.div layoutId="activeSubTabUnderline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500" />
+          )}
+        </button>
+      </div>
+
+      {/* Dynamic Views */}
+      {activeSubTab === "calendar" ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          
+          {/* Left Side: Interactive Calendar Grid (7 cols) */}
+          <div className="lg:col-span-7 p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                  Payment Schedule
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Select highlighted due dates to inspect member compliance.
+                </p>
+              </div>
+              
+              {/* Month Navigator */}
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 p-1 rounded-xl self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={handlePrevMonth}
+                  className="p-1.5 hover:bg-slate-900 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-xs font-mono font-bold text-white px-2 min-w-[110px] text-center">
+                  {new Date(currentYear, currentMonth).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleNextMonth}
+                  className="p-1.5 hover:bg-slate-900 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Frequency Explainer Banner */}
+            <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between text-xs text-emerald-400/90 font-sans gap-2">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  Frequency Settings: <strong className="uppercase">{chama.frequency}</strong> • Target Contribution: <strong>{chama.contributionAmount.toLocaleString()} {chama.currency}</strong>
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-500">
+                Created {new Date(chama.createdAt).toLocaleDateString()}
+              </span>
+            </div>
+
+            {/* Calendar Grid */}
+            <div className="space-y-2">
+              {/* Weekday Labels */}
+              <div className="grid grid-cols-7 gap-1 text-center">
+                {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((day) => (
+                  <span key={day} className="text-[10px] font-mono font-bold text-slate-500 py-1">
+                    {day}
+                  </span>
+                ))}
+              </div>
+
+              {/* Day Cells */}
+              <div className="grid grid-cols-7 gap-1">
+                {getDaysInMonthGrid(currentYear, currentMonth).map((gridDay, idx) => {
+                  const cellDate = new Date(gridDay.year, gridDay.month, gridDay.day);
+                  const isCellDue = isDueDate(cellDate, chama.createdAt, chama.frequency);
+                  const isSelected = selectedDueDate && 
+                    selectedDueDate.getDate() === gridDay.day && 
+                    selectedDueDate.getMonth() === gridDay.month && 
+                    selectedDueDate.getFullYear() === gridDay.year;
+                    
+                  // Calculate compliance for this day if it is a due date
+                  let statusSummary = null;
+                  if (isCellDue && members.length > 0) {
+                    const stats = members.map(m => getMemberPaymentStatusForDueDate(m.id, cellDate, chama.frequency, contributions));
+                    const approvedCount = stats.filter(s => s.status === "approved").length;
+                    const pendingCount = stats.filter(s => s.status === "pending").length;
+                    
+                    if (approvedCount === members.length) {
+                      statusSummary = "full";
+                    } else if (approvedCount + pendingCount > 0) {
+                      statusSummary = "partial";
+                    } else {
+                      statusSummary = "none";
+                    }
+                  }
+
+                  const isToday = new Date().getDate() === gridDay.day && 
+                    new Date().getMonth() === gridDay.month && 
+                    new Date().getFullYear() === gridDay.year;
+
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      disabled={!isCellDue}
+                      onClick={() => isCellDue && setSelectedDueDate(cellDate)}
+                      className={`h-14 p-1.5 rounded-xl flex flex-col justify-between items-start transition-all relative group text-left ${
+                        !gridDay.isCurrentMonth ? "opacity-25" : "opacity-100"
+                      } ${
+                        isCellDue 
+                          ? "border border-dashed border-emerald-500/40 bg-emerald-500/5 hover:bg-emerald-500/10 cursor-pointer" 
+                          : "border border-transparent bg-slate-950/20"
+                      } ${
+                        isSelected ? "ring-2 ring-emerald-500/70 border-solid" : ""
+                      } ${
+                        isToday ? "bg-slate-900 border-slate-850" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-[10px] font-mono font-bold ${
+                          isToday ? "text-emerald-400 font-extrabold" : "text-slate-400"
+                        }`}>
+                          {gridDay.day}
+                        </span>
+                        
+                        {isCellDue && (
+                          <span className="text-[8px] font-mono font-extrabold text-emerald-500 leading-none">DUE</span>
+                        )}
+                      </div>
+
+                      {/* Day compliance indicators */}
+                      {isCellDue && statusSummary && (
+                        <div className="w-full flex items-center justify-between gap-1.5 pt-1">
+                          <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full ${
+                                statusSummary === "full" ? "bg-emerald-500 w-full" :
+                                statusSummary === "partial" ? "bg-amber-500 w-1/2" : "bg-red-500 w-1"
+                              }`} 
+                            />
+                          </div>
+                          
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            statusSummary === "full" ? "bg-emerald-500" :
+                            statusSummary === "partial" ? "bg-amber-500" : "bg-red-500"
+                          }`} />
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Side: Compliance Checklist Detail Panel (5 cols) */}
+          <div className="lg:col-span-5 p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+            <div className="border-b border-slate-900 pb-3">
+              <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-emerald-400" /> Compliance Details
+              </h4>
+              <p className="text-[11px] text-slate-500 mt-1">
+                {selectedDueDate ? (
+                  <>Period ending on <strong className="text-slate-300 font-mono">{selectedDueDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</strong></>
+                ) : (
+                  "Select a due date on the calendar to audit payment records."
+                )}
+              </p>
+            </div>
+
+            {selectedDueDate ? (() => {
+              const stats = members.map(m => {
+                const pay = getMemberPaymentStatusForDueDate(m.id, selectedDueDate, chama.frequency, contributions);
+                return { member: m, ...pay };
+              });
+              
+              const paidCount = stats.filter(s => s.status === "approved").length;
+              const pendingCount = stats.filter(s => s.status === "pending").length;
+              const complianceRate = members.length > 0 ? (paidCount / members.length) * 100 : 0;
+
+              return (
+                <div className="space-y-4">
+                  {/* Performance stats header */}
+                  <div className="p-4 bg-slate-950 border border-slate-850 rounded-2xl flex items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-mono text-slate-500 uppercase">Compliance Rate</p>
+                      <p className="text-xl font-extrabold font-mono text-emerald-400">{complianceRate.toFixed(0)}%</p>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        {paidCount} of {members.length} Paid
+                        {pendingCount > 0 && <span className="text-amber-400"> ({pendingCount} Pending)</span>}
+                      </p>
+                    </div>
+
+                    {/* Circular compliance gauge */}
+                    <div className="w-14 h-14 relative flex items-center justify-center shrink-0">
+                      <svg className="w-full h-full transform -rotate-90">
+                        <circle cx="28" cy="28" r="24" className="stroke-slate-800" strokeWidth="4" fill="transparent" />
+                        <circle 
+                          cx="28" 
+                          cy="28" 
+                          r="24" 
+                          className="stroke-emerald-500" 
+                          strokeWidth="4" 
+                          fill="transparent" 
+                          strokeDasharray={`${2 * Math.PI * 24}`} 
+                          strokeDashoffset={`${2 * Math.PI * 24 * (1 - complianceRate / 100)}`}
+                        />
+                      </svg>
+                      <span className="absolute text-[10px] font-mono font-bold text-white">{paidCount}/{members.length}</span>
+                    </div>
+                  </div>
+
+                  {/* Checklist of Members */}
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    {stats.map(({ member, status, amount, contrib }) => (
+                      <div 
+                        key={member.id} 
+                        className="p-3 bg-slate-950/60 border border-slate-900 rounded-xl flex items-center justify-between gap-3 text-xs hover:border-slate-800 transition-all"
+                      >
+                        <div className="space-y-0.5">
+                          <p className="font-bold text-slate-200">{member.name}</p>
+                          <p className="text-[9px] font-mono text-slate-500 uppercase">
+                            {member.role === "super_admin" ? "Super Admin" : member.role === "treasurer" ? "Treasurer" : member.role === "secretary" ? "Secretary" : "Member"}
+                          </p>
+                        </div>
+
+                        <div className="text-right flex flex-col items-end">
+                          <div className="flex items-center gap-1.5">
+                            {status === "approved" ? (
+                              <span className="flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/5 border border-emerald-500/10 px-1.5 py-0.5 rounded uppercase">
+                                <Check className="w-3 h-3 stroke-[3]" /> Paid
+                              </span>
+                            ) : status === "pending" ? (
+                              <span className="flex items-center gap-1 text-[10px] font-mono font-bold text-amber-400 bg-amber-500/5 border border-amber-500/10 px-1.5 py-0.5 rounded uppercase animate-pulse">
+                                <Clock className="w-3 h-3" /> Pending Review
+                              </span>
+                            ) : status === "rejected" ? (
+                              <span className="flex items-center gap-1 text-[10px] font-mono font-bold text-red-400 bg-red-500/5 border border-red-500/10 px-1.5 py-0.5 rounded uppercase">
+                                <X className="w-3 h-3" /> Rejected
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-[10px] font-mono font-bold text-slate-500 bg-slate-950 border border-slate-855 px-1.5 py-0.5 rounded uppercase">
+                                <AlertCircle className="w-3 h-3" /> Unpaid
+                              </span>
+                            )}
+                          </div>
+                          {amount > 0 && (
+                            <span className="text-[9px] font-mono text-slate-400 mt-1">
+                              {amount.toLocaleString()} {chama.currency} 
+                              {contrib?.date && ` on ${new Date(contrib.date).toLocaleDateString()}`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Administrative instructions helper */}
+                  <div className="p-3.5 bg-slate-950 border border-slate-900 rounded-xl space-y-2 text-[10px] text-slate-400 font-sans">
+                    <p className="font-bold text-slate-300 font-mono flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-500" /> Administrative Notice
+                    </p>
+                    <p className="leading-relaxed">
+                      If a member has completed their bank or mobile money transfer but shows as <strong>"Pending Review"</strong>, the group Treasurer must navigate to the <strong>"Contributions Ledger"</strong> sub-tab to inspect and approve their deposit receipt.
+                    </p>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="py-12 text-center text-slate-500 text-xs font-mono space-y-2">
+                <Calendar className="w-8 h-8 mx-auto text-slate-800 animate-pulse" />
+                <p>No due dates fall in this month.</p>
+              </div>
+            )}
+          </div>
+
+        </div>
+      ) : (
+        <>
+          {/* Filter and Overview Stats */}
+          <div className="p-4 bg-slate-900/40 border border-slate-900 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3 self-start md:self-auto">
+              <div className="flex items-center gap-1 text-xs font-mono text-slate-400">
+                <Filter className="w-3.5 h-3.5" /> Filter by:
+              </div>
+              
+              {/* Type Filter */}
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1 text-xs text-slate-300 focus:outline-none"
+              >
+                <option value="all">All Types</option>
+                <option value="savings">Savings</option>
+                <option value="investment">Investment Pool</option>
+                <option value="loan_repayment">Loan Repayments</option>
+                <option value="fine">Fines</option>
+                <option value="other">Other</option>
+              </select>
+
+              {/* Status Filter */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1 text-xs text-slate-300 focus:outline-none"
+              >
+                <option value="all">All Status</option>
+                <option value="pending">Pending Verification</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+
+            <div className="text-xs text-slate-500 font-mono">
+              Showing {filteredContributions.length} of {contributions.length} recorded payments
+            </div>
+          </div>
+
+          {/* Split screen: Main ledger table, and Treasurer's approvals sidebar */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            
+            {/* Left Side: Contribution Ledger */}
+            <div className="lg:col-span-8 p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+              <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider border-b border-slate-900 pb-3">
+                Transaction History
+              </h4>
+
+              {loading ? (
+                <div className="space-y-3 py-6">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 bg-slate-900/20 border border-slate-900/60 animate-pulse rounded-xl" />
+                  ))}
+                </div>
+              ) : filteredContributions.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 text-xs font-mono">
+                  No matching transactions found.
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                  {filteredContributions.map((c) => (
+                    <div 
+                      key={c.id} 
+                      className="p-4 bg-slate-950/40 border border-slate-900/80 rounded-xl flex items-center justify-between gap-4 hover:border-slate-800 hover:bg-slate-950/60 transition-all text-xs"
+                    >
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-200 truncate">{c.memberName}</span>
+                          {c.userId === currentUserId && (
+                            <span className="text-[9px] font-mono px-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded">YOU</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono uppercase flex items-center gap-1.5 flex-wrap">
+                          <span>{c.type}</span>
+                          <span>•</span>
+                          <span>{new Date(c.date).toLocaleDateString()}</span>
+                          {c.type === "savings" && c.status === "approved" && (
+                            <>
+                              <span>•</span>
+                              <span className="text-emerald-400 font-bold font-mono bg-emerald-500/5 px-1 py-0.5 rounded border border-emerald-500/10">
+                                +{(c.amount / (chama.sharePrice || 2000)).toFixed(1)} Shares
+                              </span>
+                            </>
+                          )}
+                        </p>
+                        {c.notes && (
+                          <p className="text-[10px] text-slate-400 italic line-clamp-1">"{c.notes}"</p>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-mono font-extrabold text-white text-sm">+{c.amount.toLocaleString()} {chama.currency}</p>
+                        <span className={`inline-block text-[9px] font-mono font-extrabold px-2 py-0.5 rounded uppercase mt-1 ${
+                          c.status === "approved" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                          c.status === "pending" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : 
+                          "bg-red-500/10 text-red-400 border border-red-500/20"
+                        }`}>
+                          {c.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Right Side: Treasurer Approval Panel */}
+            <div className="lg:col-span-4 p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+                <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                  Treasurer Approvals
+                </h4>
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
+                  {isTreasurer ? "TREASURER ACCESS" : "VIEW ONLY"}
+                </span>
+              </div>
+
+              {!isTreasurer ? (
+                <div className="p-4 bg-slate-950/20 border border-slate-900 rounded-xl space-y-2 text-xs text-slate-500 text-center">
+                  <AlertCircle className="w-6 h-6 mx-auto text-slate-700" />
+                  <p className="font-mono text-[10px]">APPROVALS RESTRICTED</p>
+                  <p>Only the group Treasurer is authorized to verify and approve pending contributions.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-[11px] text-slate-400">
+                    Incoming member payments waiting for bank statement verification. Verify receipts before approving.
+                  </p>
+                  
+                  <div className="space-y-3">
+                    {contributions.filter((c) => c.status === "pending").length === 0 ? (
+                      <div className="p-4 bg-slate-950/30 border border-slate-900 rounded-xl text-center text-xs text-slate-500 space-y-2">
+                        <CheckCircle className="w-6 h-6 mx-auto text-slate-700" />
+                        <p className="font-mono text-[10px]">ALL CLEAR</p>
+                        <p>No contributions waiting for approval.</p>
+                      </div>
+                    ) : (
+                      contributions
+                        .filter((c) => c.status === "pending")
+                        .map((c) => (
+                          <div key={c.id} className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-2.5 text-xs">
+                            <div>
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-200">{c.memberName}</span>
+                                <span className="font-mono text-emerald-400 font-extrabold">{c.amount.toLocaleString()} {chama.currency}</span>
+                              </div>
+                              <p className="text-[9px] text-slate-500 font-mono uppercase pt-0.5">{c.type} • {new Date(c.date).toLocaleDateString()}</p>
+                              {c.notes && (
+                                <p className="text-[10px] text-slate-400 mt-1 italic border-l border-slate-800 pl-2">"{c.notes}"</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                onClick={() => handleReject(c.id)}
+                                className="flex-1 bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                              >
+                                <X className="w-3 h-3" /> REJECT
+                              </button>
+                              <button
+                                onClick={() => handleApprove(c)}
+                                className="flex-1 bg-emerald-500/10 hover:bg-emerald-500 hover:text-slate-950 border border-emerald-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                              >
+                                <Check className="w-3.5 h-3.5 stroke-[3]" /> APPROVE
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>
+        </>
+      )}
+
+      {/* Record Contribution Modal */}
+      <AnimatePresence>
+        {showAddModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 relative"
+            >
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-emerald-500" /> Record Member Contribution
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Submit a savings contribution or repayment receipt on behalf of a specific member
+                </p>
+              </div>
+
+              {error && (
+                <div className="p-3 bg-red-950/50 border border-red-500/30 rounded-lg text-xs text-red-400 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleRecordContribution} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono">Chama Member</label>
+                  <select
+                    value={selectedMemberId}
+                    onChange={(e) => setSelectedMemberId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.role === "chairperson" ? "Super Admin" : m.role === "treasurer" ? "Treasurer" : m.role === "secretary" ? "Secretary" : "Member"})
+                      </option>
+                    ))}
+                    {!members.some((m) => m.id === currentUserId) && (
+                      <option value={currentUserId}>
+                        {currentUserDisplayName} (You)
+                      </option>
+                    )}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono">Amount Paid ({chama.currency})</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    placeholder="e.g. 1000"
+                  />
+                  {amount && !isNaN(parseFloat(amount)) && (
+                    <p className="text-[10px] text-emerald-400 font-mono mt-1">
+                      ✨ Equivalent to {(parseFloat(amount) / (chama.sharePrice || 2000)).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})} Shares (at {(chama.sharePrice || 2000).toLocaleString()} {chama.currency}/share)
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-400 font-mono">Payment Category</label>
+                    <select
+                      value={type}
+                      onChange={(e) => setType(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="savings">Regular Savings</option>
+                      <option value="investment">Project Investment</option>
+                      <option value="loan_repayment">Loan Repayment</option>
+                      <option value="fine">Late Fee / Fine</option>
+                      <option value="other">Other Contribution</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-400 font-mono">Payment Date</label>
+                    <input
+                      type="date"
+                      required
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono">Verification Notes / Receipt No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. M-Pesa receipt ref: QRF92KLS..."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(false)}
+                    className="px-4 py-2 text-xs font-mono text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    {submitting ? "Submitting..." : "Submit Payment"}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}

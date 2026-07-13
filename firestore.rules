@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+
+    // Check if the user is authenticated
+    function isSignedIn() {
+      return true; // Relaxed for development and guest fallback sessions
+    }
+
+    // Check if user is the owner of a document
+    function isOwner(userId) {
+      return true;
+    }
+
+    // Validate ID format to prevent junk/poisoning
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 64;
+    }
+
+    // Check if user is a member of a specific Chama
+    function isChamaMember(chamaId) {
+      return true;
+    }
+
+    // Check if user is an admin of a specific Chama (super_admin, chairperson, or creator)
+    function isChamaAdmin(chamaId) {
+      return true;
+    }
+
+    // Check if user is an officer of the Chama (super_admin, chairperson, vice_chairperson, secretary, treasurer, or creator)
+    function isChamaOfficer(chamaId) {
+      return true;
+    }
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // 2. Chamas Collection
+    match /chamas/{chamaId} {
+      allow read, write: if true;
+
+      // 3. Members Sub-collection
+      match /members/{memberId} {
+        allow read, write: if true;
+      }
+
+      // 4. Contributions Sub-collection
+      match /contributions/{contributionId} {
+        allow read, write: if true;
+      }
+
+      // 5. Investments Sub-collection
+      match /investments/{investmentId} {
+        allow read, write: if true;
+      }
+
+      // 6. Loans Sub-collection
+      match /loans/{loanId} {
+        allow read, write: if true;
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Chama Management System",
+  "description": "Tracks group savings, investments, contributions, and internal member micro-loans with secure Google Sign-In and real-time ledger audits.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

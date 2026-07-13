@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Public profile details of a registered user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique user identifier matching their Auth UID" },
+        "name": { "type": "string", "description": "The user's display name" },
+        "email": { "type": "string", "description": "The user's email address" },
+        "photoURL": { "type": "string", "description": "The URL of the user's profile image" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the profile was created" }
+      },
+      "required": ["id", "name", "email", "createdAt"]
+    },
+    "Chama": {
+      "title": "Chama Group",
+      "description": "Represents an informal cooperative savings and investment group (Chama)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique Chama identifier" },
+        "name": { "type": "string", "description": "The name of the Chama" },
+        "description": { "type": "string", "description": "A brief description of the Chama's focus and rules" },
+        "totalSavings": { "type": "number", "description": "The running total of savings in the Chama" },
+        "totalInvestments": { "type": "number", "description": "The total amount currently invested" },
+        "totalLoans": { "type": "number", "description": "The total outstanding loans given to members" },
+        "frequency": { "type": "string", "enum": ["weekly", "monthly", "custom"], "description": "How often contributions are expected" },
+        "contributionAmount": { "type": "number", "description": "The standard contribution amount expected per period" },
+        "currency": { "type": "string", "description": "The currency used by this Chama (e.g., KES, USD)" },
+        "createdBy": { "type": "string", "description": "The user UID who created this Chama" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the Chama was created" }
+      },
+      "required": ["id", "name", "totalSavings", "totalInvestments", "totalLoans", "frequency", "contributionAmount", "currency", "createdBy", "createdAt"]
+    },
+    "Member": {
+      "title": "Chama Member",
+      "description": "A user's membership and role in a specific Chama",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The membership ID (usually matching the user's Auth UID)" },
+        "userId": { "type": "string", "description": "The user's Auth UID" },
+        "name": { "type": "string", "description": "The user's display name" },
+        "email": { "type": "string", "description": "The user's email address" },
+        "photoURL": { "type": "string", "description": "The user's profile image URL" },
+        "role": { "type": "string", "enum": ["chairperson", "treasurer", "secretary", "member"], "description": "The member's office or role in the Chama" },
+        "joinedAt": { "type": "string", "format": "date-time", "description": "Timestamp when the member joined" }
+      },
+      "required": ["id", "userId", "name", "email", "role", "joinedAt"]
+    },
+    "Contribution": {
+      "title": "Member Contribution",
+      "description": "A contribution made by a member towards savings, projects, or investments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique contribution transaction identifier" },
+        "userId": { "type": "string", "description": "The contributor's Auth UID" },
+        "memberName": { "type": "string", "description": "The display name of the contributor" },
+        "amount": { "type": "number", "description": "The contribution amount" },
+        "date": { "type": "string", "format": "date-time", "description": "Date when the contribution was made" },
+        "type": { "type": "string", "enum": ["savings", "investment", "loan_repayment", "fine", "other"], "description": "The category of contribution" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "Verification status of the contribution" },
+        "notes": { "type": "string", "description": "Optional notes from the member" },
+        "approvedBy": { "type": "string", "description": "The UID of the treasurer/admin who approved this" },
+        "approvedAt": { "type": "string", "format": "date-time", "description": "Timestamp when this was approved" }
+      },
+      "required": ["id", "userId", "memberName", "amount", "date", "type", "status"]
+    },
+    "Investment": {
+      "title": "Chama Investment",
+      "description": "An asset, land, project, or financial vehicle owned by the Chama",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique investment identifier" },
+        "title": { "type": "string", "description": "The name or title of the investment project" },
+        "description": { "type": "string", "description": "Details about the investment" },
+        "amountInvested": { "type": "number", "description": "The total cash invested from Chama funds" },
+        "currentValue": { "type": "number", "description": "The estimated current market value of the asset" },
+        "status": { "type": "string", "enum": ["active", "matured", "liquidated"], "description": "The operational state of the asset" },
+        "dateAcquired": { "type": "string", "format": "date", "description": "The date when the investment was initiated" },
+        "expectedReturn": { "type": "string", "description": "E.g., 10% annual, dynamic, land appreciation" },
+        "notes": { "type": "string", "description": "Operational remarks" },
+        "createdBy": { "type": "string", "description": "The user UID who registered the investment" }
+      },
+      "required": ["id", "title", "amountInvested", "currentValue", "status", "dateAcquired"]
+    },
+    "Loan": {
+      "title": "Chama Member Loan",
+      "description": "A loan advanced to a member from the collective savings pool",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique loan identifier" },
+        "userId": { "type": "string", "description": "The borrower's Auth UID" },
+        "memberName": { "type": "string", "description": "The borrower's display name" },
+        "amount": { "type": "number", "description": "The principal loan amount requested/advanced" },
+        "interestRate": { "type": "number", "description": "The flat/reducing interest rate percentage" },
+        "repaymentTermMonths": { "type": "number", "description": "The duration of repayment in months" },
+        "amountRepaid": { "type": "number", "description": "The total amount repaid so far" },
+        "status": { "type": "string", "enum": ["pending", "approved", "active", "repaid", "rejected"], "description": "The current lifecycle state of the loan" },
+        "dateRequested": { "type": "string", "format": "date-time", "description": "Timestamp when the loan was requested" },
+        "dueDate": { "type": "string", "format": "date", "description": "Expected final repayment date" },
+        "approvedBy": { "type": "string", "description": "The UID of the treasurer/chairperson who approved it" }
+      },
+      "required": ["id", "userId", "memberName", "amount", "interestRate", "repaymentTermMonths", "amountRepaid", "status", "dateRequested"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stores user profiles keyed by their Firebase Auth UID"
+    },
+    "/chamas/{chamaId}": {
+      "schema": "Chama",
+      "description": "Stores details of the Chama groups"
+    },
+    "/chamas/{chamaId}/members/{memberId}": {
+      "schema": "Member",
+      "description": "Sub-collection tracking membership within a Chama"
+    },
+    "/chamas/{chamaId}/contributions/{contributionId}": {
+      "schema": "Contribution",
+      "description": "Sub-collection tracking member contributions inside a Chama"
+    },
+    "/chamas/{chamaId}/investments/{investmentId}": {
+      "schema": "Investment",
+      "description": "Sub-collection tracking Chama portfolio investments"
+    },
+    "/chamas/{chamaId}/loans/{loanId}": {
+      "schema": "Loan",
+      "description": "Sub-collection tracking internal member loans"
+    }
+  }
+}
