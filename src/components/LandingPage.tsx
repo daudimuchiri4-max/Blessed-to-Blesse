@@ -230,7 +230,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
             <div className="bg-slate-50 border border-slate-100 rounded-2xl overflow-hidden p-3 shadow-sm flex-1 flex flex-col justify-between min-h-[460px] relative">
               
               {/* Photo Display Frame */}
-              <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-slate-100 border border-slate-200 shadow-inner group">
+              <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-[linear-gradient(135deg,#1D4ED8_0%,#059669_100%)] border border-slate-200 shadow-inner group">
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={currentSlide}
@@ -246,7 +246,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 </AnimatePresence>
 
                 {/* Overlaid Banner Title with custom backing */}
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/25 to-transparent flex flex-col justify-end p-4 sm:p-6 text-white">
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/45 to-transparent flex flex-col justify-end p-4 sm:p-6 text-white">
                   <span className="text-[10px] font-mono tracking-widest text-emerald-300 uppercase font-semibold bg-emerald-950/40 px-2.5 py-0.5 rounded border border-emerald-500/20 self-start mb-2">
                     {slides[currentSlide].subtitle}
                   </span>
@@ -324,7 +324,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
             >
               <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full blur-3xl pointer-events-none opacity-50" />
               
-              <div className="space-y-5">
+              <div className="space-y-6">
                 <div className="space-y-1">
                   <span className="text-[9px] font-mono uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">LEDGER PORTAL</span>
                   <h3 className="text-lg font-bold text-slate-900 mt-1.5">Sign In & Coordinate</h3>
@@ -349,13 +349,10 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                   id="btn-google-login"
                   onClick={handleGoogleLogin}
                   disabled={loading}
-                  className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-700 transition-all cursor-pointer text-xs shadow-sm"
+                  className="w-full flex items-center justify-center gap-2.5 py-3.5 px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] font-bold text-white transition-all cursor-pointer text-sm shadow-md border border-transparent"
                 >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                    <path
-                      fill="#EA4335"
-                      d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.245-3.125C18.29 1.48 15.445 0 12.24 0 5.58 0 0 5.37 0 12s5.58 12 12.24 12c6.96 0 11.57-4.89 11.57-11.79 0-.795-.085-1.4-.195-1.925H12.24z"
-                    />
+                  <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24">
+                    <path d="M12.24 10.285V14.4h6.887c-.275 1.565-1.88 4.604-6.887 4.604-4.33 0-7.859-3.578-7.859-8s3.53-8 7.859-8c2.46 0 4.105 1.025 5.047 1.926l3.245-3.125C18.29 1.48 15.445 0 12.24 0 5.58 0 0 5.37 0 12s5.58 12 12.24 12c6.96 0 11.57-4.89 11.57-11.79 0-.795-.085-1.4-.195-1.925H12.24z" />
                   </svg>
                   Connect with Google Account
                 </button>
@@ -370,7 +367,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 </div>
 
                 {/* Accordion style Classic Email registration/login */}
-                <details className="group border border-slate-200 rounded-xl overflow-hidden [&_summary::-webkit-details-marker]:hidden">
+                <details className="group border border-slate-200 rounded-xl overflow-hidden [&_summary::-webkit-details-marker]:hidden mt-2">
                   <summary className="flex items-center justify-between p-3 bg-white hover:bg-slate-50/50 cursor-pointer text-xs text-slate-600 select-none font-semibold">
                     <span className="flex items-center gap-2">
                       <LogIn className="w-3.5 h-3.5 text-slate-400" /> Standard Email Access
