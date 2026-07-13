@@ -108,6 +108,8 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
     };
   }, [chama.id, currentUserId]);
 
+  const isRegularMember = myMemberRecord?.role === "member";
+
   // Aggregate user's personal contributions
   const myTotalApproved = allContributions
     .filter((c) => c.userId === currentUserId && c.status === "approved")
@@ -126,7 +128,8 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
     return {
       date: formattedDate,
       "Cumulative Savings": runningTotal,
-      Contribution: c.amount,
+      // For regular members, hide other members' individual contribution values from chart tooltips
+      Contribution: isRegularMember ? (c.userId === currentUserId ? c.amount : null) : c.amount,
     };
   });
 
@@ -375,10 +378,12 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
                             </span>
                           </div>
 
-                          <div className="pt-2 border-t border-slate-900/50 flex justify-between items-center text-[10px] font-mono text-slate-500">
-                            <span>Contribution: <strong className="text-slate-300">{(memberSavings).toLocaleString()} {chama.currency}</strong></span>
-                            <span>Shares: <strong className="text-emerald-400">{memberShares.toFixed(1)}</strong></span>
-                          </div>
+                          {(!isRegularMember || m.userId === currentUserId || m.id === currentUserId) && (
+                            <div className="pt-2 border-t border-slate-900/50 flex justify-between items-center text-[10px] font-mono text-slate-500">
+                              <span>Contribution: <strong className="text-slate-300">{(memberSavings).toLocaleString()} {chama.currency}</strong></span>
+                              <span>Shares: <strong className="text-emerald-400">{memberShares.toFixed(1)}</strong></span>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -593,26 +598,28 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
               </div>
 
               <div className="space-y-3">
-                {recentContributions.length === 0 ? (
+                {recentContributions.filter((c) => !isRegularMember || c.userId === currentUserId).length === 0 ? (
                   <p className="text-xs text-slate-500 font-mono text-center py-6">No contributions logged yet.</p>
                 ) : (
-                  recentContributions.map((c) => (
-                    <div key={c.id} className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl flex items-center justify-between text-xs gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-200">{c.memberName}</p>
-                        <p className="text-[10px] text-slate-500 font-mono uppercase">{c.type} • {new Date(c.date).toLocaleDateString()}</p>
+                  recentContributions
+                    .filter((c) => !isRegularMember || c.userId === currentUserId)
+                    .map((c) => (
+                      <div key={c.id} className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl flex items-center justify-between text-xs gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-200">{c.memberName}</p>
+                          <p className="text-[10px] text-slate-500 font-mono uppercase">{c.type} • {new Date(c.date).toLocaleDateString()}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-mono font-bold text-slate-100">+{c.amount.toLocaleString()} {chama.currency}</p>
+                          <span className={`inline-block text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase ${
+                            c.status === "approved" ? "bg-emerald-500/10 text-emerald-400" :
+                            c.status === "pending" ? "bg-amber-500/10 text-amber-400" : "bg-red-500/10 text-red-400"
+                          }`}>
+                            {c.status}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="font-mono font-bold text-slate-100">+{c.amount.toLocaleString()} {chama.currency}</p>
-                        <span className={`inline-block text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase ${
-                          c.status === "approved" ? "bg-emerald-500/10 text-emerald-400" :
-                          c.status === "pending" ? "bg-amber-500/10 text-amber-400" : "bg-red-500/10 text-red-400"
-                        }`}>
-                          {c.status}
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    ))
                 )}
               </div>
             </div>

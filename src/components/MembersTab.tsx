@@ -410,6 +410,18 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
                     .reduce((sum, c) => sum + c.amount, 0);
                   const memberShares = memberSavings / (chama.sharePrice || 2000);
 
+                  const isMe = m.userId === currentUserId || m.id === currentUserId;
+                  const isRegularMember = memberRole === "member";
+
+                  if (isRegularMember && !isMe) {
+                    return (
+                      <div className="bg-slate-950/30 border border-slate-900/60 p-2.5 rounded-xl flex items-center justify-between text-[10px] font-mono text-slate-500">
+                        <span>Savings & Shares:</span>
+                        <span className="text-[9px] bg-slate-900/60 px-1.5 py-0.5 rounded text-slate-500 uppercase font-bold tracking-wider">Confidential</span>
+                      </div>
+                    );
+                  }
+
                   return (
                     <div className="bg-slate-950/50 border border-slate-900/60 p-2.5 rounded-xl flex items-center justify-between text-[10px] font-mono">
                       <div className="space-y-0.5">

@@ -117,37 +117,8 @@ export default function App() {
           { merge: true }
         );
       } else {
-        // Automatically log in anonymously behind the scenes!
-        try {
-          await signInAnonymously(auth);
-        } catch (err: any) {
-          console.warn("Auto anonymous sign-in failed, falling back to a persistent simulated local session:", err);
-          
-          const simulatedUser = {
-            uid: "simulated-guest-user",
-            displayName: "Simulated Guest",
-            email: "guest-cooperator@chama.org",
-            photoURL: "https://api.dicebear.com/7.x/initials/svg?seed=Simulated%20Guest",
-            isAnonymous: true,
-          };
-
-          try {
-            // Write simulated user to Firestore so references and memberships are valid
-            const userRef = doc(db, "users", "simulated-guest-user");
-            await setDoc(userRef, {
-              id: "simulated-guest-user",
-              name: "Simulated Guest",
-              email: "guest-cooperator@chama.org",
-              photoURL: "https://api.dicebear.com/7.x/initials/svg?seed=Simulated%20Guest",
-              createdAt: new Date().toISOString(),
-            }, { merge: true });
-          } catch (dbErr) {
-            console.error("Failed to write simulated user to DB:", dbErr);
-          }
-
-          setUser(simulatedUser as any);
-          setAuthLoading(false);
-        }
+        setUser(null);
+        setAuthLoading(false);
       }
     });
 
@@ -291,6 +262,8 @@ export default function App() {
   }, [selectedChama?.id, user?.uid, user?.email]);
 
   const handleLogout = async () => {
+    setUser(null);
+    setSelectedChama(null);
     await signOut(auth);
   };
 
@@ -494,22 +467,21 @@ export default function App() {
               />
             </button>
 
-            {user?.isAnonymous ? (
+            {user?.isAnonymous && (
               <button
                 onClick={() => setShowProfileSettings(true)}
                 className="text-[10px] font-mono bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-colors"
               >
-                Sign In
-              </button>
-            ) : (
-              <button
-                onClick={handleLogout}
-                className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-red-950/40 hover:text-red-400 transition-all cursor-pointer text-slate-400"
-                title="Logout session"
-              >
-                <LogOut className="w-4 h-4" />
+                Link Google
               </button>
             )}
+            <button
+              onClick={handleLogout}
+              className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-red-950/40 hover:text-red-400 text-slate-450 hover:bg-slate-950 transition-all cursor-pointer"
+              title="Logout session"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
 
         </div>

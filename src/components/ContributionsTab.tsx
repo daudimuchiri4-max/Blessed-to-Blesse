@@ -374,6 +374,10 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
   };
 
   const filteredContributions = contributions.filter((c) => {
+    // Regular members can only view their own contributions
+    if (memberRole === "member" && c.userId !== currentUserId) {
+      return false;
+    }
     const matchesType = typeFilter === "all" || c.type === typeFilter;
     const matchesStatus = statusFilter === "all" || c.status === statusFilter;
     return matchesType && matchesStatus;
@@ -499,11 +503,14 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                   // Calculate compliance for this day if it is a due date
                   let statusSummary = null;
                   if (isCellDue && members.length > 0) {
-                    const stats = members.map(m => getMemberPaymentStatusForDueDate(m.id, cellDate, chama.frequency, contributions));
+                    const visibleMembersForCal = memberRole === "member"
+                      ? members.filter(m => m.id === currentUserId || m.userId === currentUserId)
+                      : members;
+                    const stats = visibleMembersForCal.map(m => getMemberPaymentStatusForDueDate(m.id, cellDate, chama.frequency, contributions));
                     const approvedCount = stats.filter(s => s.status === "approved").length;
                     const pendingCount = stats.filter(s => s.status === "pending").length;
                     
-                    if (approvedCount === members.length) {
+                    if (approvedCount === visibleMembersForCal.length) {
                       statusSummary = "full";
                     } else if (approvedCount + pendingCount > 0) {
                       statusSummary = "partial";
@@ -587,14 +594,17 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
             </div>
 
             {selectedDueDate ? (() => {
-              const stats = members.map(m => {
+              const visibleMembersList = memberRole === "member"
+                ? members.filter(m => m.id === currentUserId || m.userId === currentUserId)
+                : members;
+              const stats = visibleMembersList.map(m => {
                 const pay = getMemberPaymentStatusForDueDate(m.id, selectedDueDate, chama.frequency, contributions);
                 return { member: m, ...pay };
               });
               
               const paidCount = stats.filter(s => s.status === "approved").length;
               const pendingCount = stats.filter(s => s.status === "pending").length;
-              const complianceRate = members.length > 0 ? (paidCount / members.length) * 100 : 0;
+              const complianceRate = visibleMembersList.length > 0 ? (paidCount / visibleMembersList.length) * 100 : 0;
 
               return (
                 <div className="space-y-4">
@@ -604,7 +614,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                       <p className="text-[9px] font-mono text-slate-500 uppercase">Compliance Rate</p>
                       <p className="text-xl font-extrabold font-mono text-emerald-400">{complianceRate.toFixed(0)}%</p>
                       <p className="text-[10px] text-slate-400 font-mono">
-                        {paidCount} of {members.length} Paid
+                        {paidCount} of {visibleMembersList.length} Paid
                         {pendingCount > 0 && <span className="text-amber-400"> ({pendingCount} Pending)</span>}
                       </p>
                     </div>
@@ -624,7 +634,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                           strokeDashoffset={`${2 * Math.PI * 24 * (1 - complianceRate / 100)}`}
                         />
                       </svg>
-                      <span className="absolute text-[10px] font-mono font-bold text-white">{paidCount}/{members.length}</span>
+                      <span className="absolute text-[10px] font-mono font-bold text-white">{paidCount}/{visibleMembersList.length}</span>
                     </div>
                   </div>
 
