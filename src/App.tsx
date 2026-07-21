@@ -3,6 +3,7 @@ import { onAuthStateChanged, signOut, User, signInWithPopup, signInWithEmailAndP
 import { doc, setDoc, onSnapshot, collection, query, where, getDocs, deleteDoc, updateDoc, arrayUnion } from "firebase/firestore";
 import { auth, db, googleProvider } from "./firebase";
 import { Chama, Member, ChamaNotification } from "./types";
+import { createChamaNotification } from "./utils/notifications";
 import DashboardTab from "./components/DashboardTab";
 import ContributionsTab from "./components/ContributionsTab";
 import InvestmentsTab from "./components/InvestmentsTab";
@@ -89,6 +90,7 @@ export default function App() {
   // Notifications State
   const [notifications, setNotifications] = useState<ChamaNotification[]>([]);
   const [showNotificationsDropdown, setShowNotificationsDropdown] = useState(false);
+  const notificationsDropdownRef = useRef<HTMLDivElement>(null);
 
   // Modal states
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -329,17 +331,106 @@ export default function App() {
     return () => unsubscribeNotifications();
   }, [selectedChama?.id, user?.uid]);
 
+  // Handle clicking outside the notification dropdown to close it
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (showNotificationsDropdown && notificationsDropdownRef.current) {
+        if (!notificationsDropdownRef.current.contains(event.target as Node)) {
+          const bellBtn = document.getElementById("notifications-bell");
+          if (!bellBtn || !bellBtn.contains(event.target as Node)) {
+            setShowNotificationsDropdown(false);
+          }
+        }
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showNotificationsDropdown]);
+
   const handleDismissNotification = async (notifId: string) => {
     if (!selectedChama || !user) return;
     try {
       const notifRef = doc(db, "chamas", selectedChama.id, "notifications", notifId);
-      await updateDoc(notifRef, {
-        readBy: arrayUnion(user.uid),
-      });
+      await deleteDoc(notifRef);
     } catch (err) {
-      console.error("Error dismissing notification:", err);
+      console.error("Error dismissing/deleting notification:", err);
     }
   };
+
+  // Background check for pending payments past the 10th of the month
+  useEffect(() => {
+    if (!selectedChama || !user) return;
+
+    const runBackgroundCheck = async () => {
+      const today = new Date();
+      if (today.getDate() < 10) return; // Only past/on the 10th of the month
+
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth() + 1;
+      const currentMonthStr = `${currentYear}-${String(currentMonth).padStart(2, "0")}`;
+
+      try {
+        // Fetch all members
+        const membersSnap = await getDocs(collection(db, "chamas", selectedChama.id, "members"));
+        const membersList: Member[] = [];
+        membersSnap.forEach((docSnap) => {
+          membersList.push({ id: docSnap.id, ...docSnap.data() } as Member);
+        });
+
+        // Fetch all contributions
+        const contributionsSnap = await getDocs(collection(db, "chamas", selectedChama.id, "contributions"));
+        const contributionsList: any[] = [];
+        contributionsSnap.forEach((docSnap) => {
+          contributionsList.push({ id: docSnap.id, ...docSnap.data() });
+        });
+
+        for (const m of membersList) {
+          if (m.isPending) continue; // Skip pending invitations
+
+          // Check if this member has an approved contribution of type "savings" this month
+          const hasSavingsThisMonth = contributionsList.some((c) => {
+            if (!c.date) return false;
+            if (c.userId !== m.userId && c.userId !== m.id) return false;
+            if (c.type !== "savings") return false;
+            if (c.status !== "approved") return false;
+
+            const cDate = new Date(c.date);
+            if (isNaN(cDate.getTime())) return false;
+            const cMonthStr = `${cDate.getFullYear()}-${String(cDate.getMonth() + 1).padStart(2, "0")}`;
+            return cMonthStr === currentMonthStr;
+          });
+
+          if (!hasSavingsThisMonth) {
+            // Check if we already sent a 'Payment Pending' notification to this user this month
+            const alreadyNotified = m.lastNotifiedMonth === currentMonthStr;
+
+            if (!alreadyNotified) {
+              const monthName = today.toLocaleDateString("en-US", { month: "long" });
+              await createChamaNotification(selectedChama.id, {
+                title: "Payment Pending",
+                message: `Hi ${m.name}, your monthly savings contribution of ${selectedChama.contributionAmount.toLocaleString()} ${selectedChama.currency} for ${monthName} was due on the 10th. Please complete your payment.`,
+                type: "warning",
+                userId: m.userId || m.id,
+                link: "contributions",
+              });
+
+              // Persist the last notified month on the member's document
+              const memberDocRef = doc(db, "chamas", selectedChama.id, "members", m.id);
+              await updateDoc(memberDocRef, {
+                lastNotifiedMonth: currentMonthStr,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Error running auto-payment background check:", err);
+      }
+    };
+
+    runBackgroundCheck();
+  }, [selectedChama?.id, user?.uid]);
 
   const handleLogout = async () => {
     setUser(null);
@@ -534,6 +625,7 @@ export default function App() {
             {/* Notification Bell with Dropdown */}
             <div className="relative">
               <button
+                id="notifications-bell"
                 onClick={() => setShowNotificationsDropdown(!showNotificationsDropdown)}
                 className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 hover:bg-slate-950 transition-all cursor-pointer flex items-center justify-center relative"
                 title="View notifications"
@@ -549,91 +641,96 @@ export default function App() {
               {/* Notification Dropdown List */}
               <AnimatePresence>
                 {showNotificationsDropdown && (
-                  <>
-                    <div 
-                      className="fixed inset-0 z-40" 
-                      onClick={() => setShowNotificationsDropdown(false)} 
-                    />
-                    <motion.div
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl z-50 overflow-hidden py-1"
-                    >
-                      <div className="px-4 py-3 border-b border-slate-800/80 flex items-center justify-between">
-                        <span className="text-xs font-bold font-sans text-slate-200 tracking-wider uppercase">Notifications</span>
-                        {notifications.length > 0 && (
-                          <button
-                            onClick={async () => {
-                              // Dismiss all notifications
-                              for (const notif of notifications) {
-                                await handleDismissNotification(notif.id);
-                              }
-                            }}
-                            className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 uppercase tracking-wider font-extrabold cursor-pointer"
-                          >
-                            Dismiss All
-                          </button>
-                        )}
-                      </div>
+                  <motion.div
+                    ref={notificationsDropdownRef}
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl z-50 overflow-hidden py-1"
+                  >
+                    <div className="px-4 py-3 border-b border-slate-800/80 flex items-center justify-between">
+                      <span className="text-xs font-bold font-sans text-slate-200 tracking-wider uppercase">Notifications</span>
+                      {notifications.length > 0 && (
+                        <button
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            try {
+                              const promises = notifications.map((notif) => handleDismissNotification(notif.id));
+                              await Promise.all(promises);
+                            } catch (err) {
+                              console.error("Failed to dismiss all notifications:", err);
+                            }
+                          }}
+                          className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 uppercase tracking-wider font-extrabold cursor-pointer"
+                        >
+                          Dismiss All
+                        </button>
+                      )}
+                    </div>
 
-                      <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/40 scrollbar-none">
-                        {notifications.length === 0 ? (
-                          <div className="px-4 py-8 text-center text-xs text-slate-500 space-y-2">
-                            <BellOff className="w-6 h-6 mx-auto text-slate-700" />
-                            <p className="font-mono text-[9px] tracking-wider uppercase">All Caught Up</p>
-                            <p>No new alerts from your cooperative.</p>
-                          </div>
-                        ) : (
-                          notifications.map((notif) => {
-                            return (
-                              <div 
-                                key={notif.id} 
-                                className="p-3 hover:bg-slate-950/40 transition-colors flex gap-2.5 items-start text-xs group"
-                              >
-                                <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
-                                  notif.type === "alert" ? "bg-red-500 animate-pulse" :
-                                  notif.type === "warning" ? "bg-amber-500" :
-                                  notif.type === "success" ? "bg-emerald-500" : "bg-blue-500"
-                                }`} />
-                                <div className="flex-1 space-y-1">
-                                  <div className="flex items-start justify-between gap-1">
-                                    <span className="font-semibold text-slate-200 block truncate max-w-[170px]">{notif.title}</span>
-                                    <span className="text-[8px] font-mono text-slate-500 shrink-0 mt-0.5">
-                                      {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                  </div>
-                                  <p className="text-[11px] text-slate-400 leading-relaxed pr-2">{notif.message}</p>
-                                  <div className="flex items-center justify-between pt-1">
-                                    {notif.link ? (
-                                      <button
-                                        onClick={() => {
-                                          setActiveTab(notif.link as any);
-                                          handleDismissNotification(notif.id);
-                                          setShowNotificationsDropdown(false);
-                                        }}
-                                        className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 font-extrabold uppercase tracking-wider cursor-pointer"
-                                      >
-                                        Go to Tab &rarr;
-                                      </button>
-                                    ) : (
-                                      <div />
-                                    )}
+                    <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/40 scrollbar-none">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-xs text-slate-500 space-y-2">
+                          <BellOff className="w-6 h-6 mx-auto text-slate-700" />
+                          <p className="font-mono text-[9px] tracking-wider uppercase">All Caught Up</p>
+                          <p>No new alerts from your cooperative.</p>
+                        </div>
+                      ) : (
+                        notifications.map((notif) => {
+                          return (
+                            <div 
+                              key={notif.id} 
+                              className="p-3 hover:bg-slate-950/40 transition-colors flex gap-2.5 items-start text-xs group"
+                            >
+                              <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                                notif.type === "alert" ? "bg-red-500 animate-pulse" :
+                                notif.type === "warning" ? "bg-amber-500" :
+                                notif.type === "success" ? "bg-emerald-500" : "bg-blue-500"
+                              }`} />
+                              <div className="flex-1 space-y-1">
+                                <div className="flex items-start justify-between gap-1">
+                                  <span className="font-semibold text-slate-200 block truncate max-w-[170px]">{notif.title}</span>
+                                  <span className="text-[8px] font-mono text-slate-500 shrink-0 mt-0.5">
+                                    {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-400 leading-relaxed pr-2">{notif.message}</p>
+                                <div className="flex items-center justify-between pt-1">
+                                  {notif.link ? (
                                     <button
-                                      onClick={() => handleDismissNotification(notif.id)}
-                                      className="text-[9px] font-mono text-slate-500 hover:text-slate-300 uppercase tracking-wider cursor-pointer font-bold opacity-0 group-hover:opacity-100 transition-opacity"
+                                      onClick={async (e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setActiveTab(notif.link as any);
+                                        await handleDismissNotification(notif.id);
+                                        setShowNotificationsDropdown(false);
+                                      }}
+                                      className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 font-extrabold uppercase tracking-wider cursor-pointer"
                                     >
-                                      Dismiss
+                                      Go to Tab &rarr;
                                     </button>
-                                  </div>
+                                  ) : (
+                                    <div />
+                                  )}
+                                  <button
+                                    onClick={async (e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      await handleDismissNotification(notif.id);
+                                    }}
+                                    className="text-[9px] font-mono text-slate-500 hover:text-slate-300 uppercase tracking-wider cursor-pointer font-bold opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    Dismiss
+                                  </button>
                                 </div>
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </motion.div>
-                  </>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </motion.div>
                 )}
               </AnimatePresence>
             </div>

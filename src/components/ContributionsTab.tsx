@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { collection, onSnapshot, query, addDoc, doc, updateDoc, increment, getDocs, where } from "firebase/firestore";
+import { collection, onSnapshot, query, addDoc, doc, updateDoc, increment, getDocs, where, deleteDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { Chama, Contribution, Member, Loan } from "../types";
-import { Plus, Check, X, Filter, DollarSign, Wallet, Calendar, AlertCircle, FileText, CheckCircle, ChevronLeft, ChevronRight, Clock, Sparkles } from "lucide-react";
+import { Plus, Check, X, Filter, DollarSign, Wallet, Calendar, AlertCircle, FileText, CheckCircle, ChevronLeft, ChevronRight, Clock, Sparkles, Edit2, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { createChamaNotification } from "../utils/notifications";
 
@@ -246,6 +246,197 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Edit/delete states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [selectedContribToEdit, setSelectedContribToEdit] = useState<Contribution | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editType, setEditType] = useState<Contribution["type"]>("savings");
+  const [editStatus, setEditStatus] = useState<Contribution["status"]>("pending");
+  const [editDate, setEditDate] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const handleOpenEditModal = (contrib: Contribution) => {
+    setSelectedContribToEdit(contrib);
+    setEditAmount(contrib.amount.toString());
+    setEditType(contrib.type);
+    setEditStatus(contrib.status);
+    setEditDate(new Date(contrib.date).toISOString().split("T")[0]);
+    setEditNotes(contrib.notes || "");
+    setShowEditModal(true);
+    setError(null);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedContribToEdit) return;
+
+    const parsedAmount = parseFloat(editAmount);
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      setError("Please enter a valid amount.");
+      return;
+    }
+
+    setSavingEdit(true);
+    setError(null);
+
+    try {
+      const oldStatus = selectedContribToEdit.status;
+      const oldAmount = selectedContribToEdit.amount;
+      const oldType = selectedContribToEdit.type;
+
+      // 1. Revert effect of the OLD contribution if it was "approved"
+      if (oldStatus === "approved") {
+        // Decrement chama total savings
+        await updateDoc(doc(db, "chamas", chama.id), {
+          totalSavings: increment(-oldAmount),
+        });
+
+        // Revert loan repayment effect if type was loan_repayment
+        if (oldType === "loan_repayment") {
+          const loansRef = collection(db, "chamas", chama.id, "loans");
+          const q = query(loansRef, where("userId", "==", selectedContribToEdit.userId));
+          const loansSnap = await getDocs(q);
+
+          for (const loanDoc of loansSnap.docs) {
+            const loanData = loanDoc.data();
+            const repaid = loanData.amountRepaid || 0;
+            const newRepaid = Math.max(0, repaid - oldAmount);
+            const totalPayable = loanData.amount * (1 + loanData.interestRate / 100);
+
+            await updateDoc(doc(db, "chamas", chama.id, "loans", loanDoc.id), {
+              amountRepaid: newRepaid,
+              status: newRepaid >= totalPayable ? "repaid" : "active",
+            });
+
+            // Adjust outstanding loans tracking
+            await updateDoc(doc(db, "chamas", chama.id), {
+              totalLoans: increment(oldAmount),
+            });
+            break; // assume single active/recently-repaid loan
+          }
+        }
+      }
+
+      // 2. Apply effect of the NEW contribution if status is "approved"
+      if (editStatus === "approved") {
+        // Increment chama total savings
+        await updateDoc(doc(db, "chamas", chama.id), {
+          totalSavings: increment(parsedAmount),
+        });
+
+        // Apply loan repayment if new type is loan_repayment
+        if (editType === "loan_repayment") {
+          const loansRef = collection(db, "chamas", chama.id, "loans");
+          const q = query(loansRef, where("userId", "==", selectedContribToEdit.userId), where("status", "==", "active"));
+          const loansSnap = await getDocs(q);
+
+          if (!loansSnap.empty) {
+            const activeLoanDoc = loansSnap.docs[0];
+            const activeLoanData = activeLoanDoc.data();
+            const repaid = activeLoanData.amountRepaid || 0;
+            const newRepaid = repaid + parsedAmount;
+            const totalPayable = activeLoanData.amount * (1 + activeLoanData.interestRate / 100);
+
+            await updateDoc(doc(db, "chamas", chama.id, "loans", activeLoanDoc.id), {
+              amountRepaid: increment(parsedAmount),
+              status: newRepaid >= totalPayable ? "repaid" : "active",
+            });
+
+            // Decrement outstanding loans tracking
+            await updateDoc(doc(db, "chamas", chama.id), {
+              totalLoans: increment(-parsedAmount),
+            });
+          }
+        }
+      }
+
+      // 3. Update the contribution in Firestore
+      const updateData: Partial<Contribution> = {
+        amount: parsedAmount,
+        type: editType,
+        status: editStatus,
+        date: new Date(editDate).toISOString(),
+        notes: editNotes,
+        approvedBy: editStatus === "approved" ? currentUserId : undefined,
+        approvedAt: editStatus === "approved" ? new Date().toISOString() : undefined,
+      };
+
+      await updateDoc(doc(db, "chamas", chama.id, "contributions", selectedContribToEdit.id), updateData);
+
+      // 4. Create and send notifications to the member
+      await createChamaNotification(chama.id, {
+        title: "Contribution Amended",
+        message: `Your contribution of ${oldAmount.toLocaleString()} ${chama.currency} (${oldType}) has been updated by the treasurer to ${parsedAmount.toLocaleString()} ${chama.currency} (${editType}) with status "${editStatus}".`,
+        type: "warning",
+        userId: selectedContribToEdit.userId,
+        link: "contributions",
+      });
+
+      setShowEditModal(false);
+      setSelectedContribToEdit(null);
+    } catch (err: any) {
+      console.error("Failed to update contribution:", err);
+      setError(err.message || "Failed to save changes.");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeleteContribution = async (contrib: Contribution) => {
+    if (!window.confirm(`Are you sure you want to delete ${contrib.memberName}'s contribution of ${contrib.amount.toLocaleString()} ${chama.currency}? This action is irreversible and will adjust all balances.`)) {
+      return;
+    }
+
+    try {
+      // 1. If it was approved, revert totals
+      if (contrib.status === "approved") {
+        await updateDoc(doc(db, "chamas", chama.id), {
+          totalSavings: increment(-contrib.amount),
+        });
+
+        if (contrib.type === "loan_repayment") {
+          const loansRef = collection(db, "chamas", chama.id, "loans");
+          const q = query(loansRef, where("userId", "==", contrib.userId));
+          const loansSnap = await getDocs(q);
+
+          for (const loanDoc of loansSnap.docs) {
+            const loanData = loanDoc.data();
+            const repaid = loanData.amountRepaid || 0;
+            const newRepaid = Math.max(0, repaid - contrib.amount);
+            const totalPayable = loanData.amount * (1 + loanData.interestRate / 100);
+
+            await updateDoc(doc(db, "chamas", chama.id, "loans", loanDoc.id), {
+              amountRepaid: newRepaid,
+              status: newRepaid >= totalPayable ? "repaid" : "active",
+            });
+
+            await updateDoc(doc(db, "chamas", chama.id), {
+              totalLoans: increment(contrib.amount),
+            });
+            break;
+          }
+        }
+      }
+
+      // 2. Delete the contribution document
+      await deleteDoc(doc(db, "chamas", chama.id, "contributions", contrib.id));
+
+      // 3. Notify the member of the deletion
+      await createChamaNotification(chama.id, {
+        title: "Contribution Removed",
+        message: `Your contribution of ${contrib.amount.toLocaleString()} ${chama.currency} (${contrib.type}) dated ${new Date(contrib.date).toLocaleDateString()} has been removed by the treasurer.`,
+        type: "alert",
+        userId: contrib.userId,
+        link: "contributions",
+      });
+
+    } catch (err) {
+      console.error("Error deleting contribution:", err);
+      alert("Failed to delete contribution. Please try again.");
+    }
+  };
   
   // Member selection states
   const [members, setMembers] = useState<Member[]>([]);
@@ -996,17 +1187,37 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                           <p className="text-[10px] text-slate-400 italic line-clamp-1">"{c.notes}"</p>
                         )}
                       </div>
-                      <div className="text-right shrink-0">
-                        <p className={`font-mono font-extrabold text-sm ${c.amount < 0 ? "text-amber-400" : "text-white"}`}>
-                          {c.amount >= 0 ? "+" : ""}{c.amount.toLocaleString()} {chama.currency}
-                        </p>
-                        <span className={`inline-block text-[9px] font-mono font-extrabold px-2 py-0.5 rounded uppercase mt-1 ${
-                          c.status === "approved" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
-                          c.status === "pending" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : 
-                          "bg-red-500/10 text-red-400 border border-red-500/20"
-                        }`}>
-                          {c.status}
-                        </span>
+                      <div className="text-right shrink-0 flex items-center gap-3">
+                        <div>
+                          <p className={`font-mono font-extrabold text-sm ${c.amount < 0 ? "text-amber-400" : "text-white"}`}>
+                            {c.amount >= 0 ? "+" : ""}{c.amount.toLocaleString()} {chama.currency}
+                          </p>
+                          <span className={`inline-block text-[9px] font-mono font-extrabold px-2 py-0.5 rounded uppercase mt-1 ${
+                            c.status === "approved" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
+                            c.status === "pending" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : 
+                            "bg-red-500/10 text-red-400 border border-red-500/20"
+                          }`}>
+                            {c.status}
+                          </span>
+                        </div>
+                        {isTreasurer && (
+                          <div className="flex flex-col gap-1.5 shrink-0 pl-2 border-l border-slate-850">
+                            <button
+                              onClick={() => handleOpenEditModal(c)}
+                              title="Edit Contribution"
+                              className="p-1 hover:bg-slate-800 text-slate-400 hover:text-emerald-400 rounded-md transition-colors cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteContribution(c)}
+                              title="Delete Contribution"
+                              className="p-1 hover:bg-slate-800 text-slate-400 hover:text-red-400 rounded-md transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1252,6 +1463,134 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                     className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
                   >
                     {submitting ? "Submitting..." : "Submit Payment"}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Contribution Modal */}
+      <AnimatePresence>
+        {showEditModal && selectedContribToEdit && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 relative"
+            >
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Edit2 className="w-5 h-5 text-emerald-500" /> Amend Member Contribution
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Modify details, adjust payment value, or update approval status for this transaction.
+                </p>
+              </div>
+
+              {error && (
+                <div className="p-3 bg-red-950/50 border border-red-500/30 rounded-lg text-xs text-red-400 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono block">Chama Member</label>
+                  <div className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-sm text-slate-300 select-none">
+                    {selectedContribToEdit.memberName}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono block">Amount Paid ({chama.currency})</label>
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  />
+                  {editAmount && !isNaN(parseFloat(editAmount)) && (
+                    <p className="text-[10px] text-emerald-400 font-mono mt-1">
+                      ✨ Equivalent to {(parseFloat(editAmount) / (chama.sharePrice || 2000)).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})} Shares (at {(chama.sharePrice || 2000).toLocaleString()} {chama.currency}/share)
+                    </p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-400 font-mono block">Payment Category</label>
+                    <select
+                      value={editType}
+                      onChange={(e) => setEditType(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="savings">Regular Savings</option>
+                      <option value="investment">Project Investment</option>
+                      <option value="loan_repayment">Loan Repayment</option>
+                      <option value="fine">Late Fee / Fine</option>
+                      <option value="other">Other Contribution</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs text-slate-400 font-mono block">Payment Date</label>
+                    <input
+                      type="date"
+                      required
+                      value={editDate}
+                      onChange={(e) => setEditDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono block">Verification Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="pending">Pending Verification</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-slate-400 font-mono block">Verification Notes / Receipt No.</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. M-Pesa receipt ref: QRF92KLS..."
+                    value={editNotes}
+                    onChange={(e) => setEditNotes(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEditModal(false);
+                      setSelectedContribToEdit(null);
+                    }}
+                    className="px-4 py-2 text-xs font-mono text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    {savingEdit ? "Saving..." : "Save Changes"}
                   </button>
                 </div>
               </form>

@@ -41,6 +41,7 @@ export interface Member {
   isPending?: boolean;
   phoneNumber?: string;
   permissions?: MemberPermissions;
+  lastNotifiedMonth?: string;
 }
 
 export interface Contribution {

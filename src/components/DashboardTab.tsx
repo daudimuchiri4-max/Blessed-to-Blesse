@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { collection, query, limit, orderBy, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { Chama, Contribution, Investment, Loan, Member } from "../types";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie, Legend } from "recharts";
 import { TrendingUp, Landmark, ShieldCheck, DollarSign, Wallet, ArrowDownRight, ArrowUpRight, Activity, Calendar, Search, Award, Sparkles, Users } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -147,6 +147,57 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
   }));
 
   const COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#14b8a6"];
+
+  // Calculate monthly contributions vs savings over the current financial year
+  const todayDate = new Date();
+  const currentYear = todayDate.getFullYear();
+  const currentMonth = todayDate.getMonth(); // 0-indexed (6 is July)
+  let fiscalStartYear = currentYear;
+  if (currentMonth < 6) {
+    fiscalStartYear = currentYear - 1;
+  }
+  const financialYearLabel = `${fiscalStartYear}/${(fiscalStartYear + 1).toString().slice(-2)}`;
+
+  const financialYearPerformanceData = (() => {
+    const months: { label: string; monthKey: string; "Total Contributions": number; "Total Savings": number }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const tempDate = new Date(fiscalStartYear, 6 + i, 1);
+      const mName = tempDate.toLocaleDateString("en-US", { month: "short" });
+      const yVal = tempDate.getFullYear();
+      const yShort = yVal.toString().slice(-2);
+      const label = `${mName} '${yShort}`;
+      const monthKey = `${yVal}-${String(tempDate.getMonth() + 1).padStart(2, "0")}`; // YYYY-MM
+      months.push({
+        label,
+        monthKey,
+        "Total Contributions": 0,
+        "Total Savings": 0,
+      });
+    }
+
+    // Populate contributions data
+    allContributions.forEach((c) => {
+      if (c.status !== "approved") return;
+      if (!c.date) return;
+      
+      const cDate = new Date(c.date);
+      if (isNaN(cDate.getTime())) return;
+      
+      const cYear = cDate.getFullYear();
+      const cMonth = cDate.getMonth() + 1;
+      const cMonthKey = `${cYear}-${String(cMonth).padStart(2, "0")}`;
+
+      const bucket = months.find((m) => m.monthKey === cMonthKey);
+      if (bucket) {
+        bucket["Total Contributions"] += c.amount;
+        if (c.type === "savings") {
+          bucket["Total Savings"] += c.amount;
+        }
+      }
+    });
+
+    return months;
+  })();
 
   return (
     <div className="space-y-8 font-sans">
@@ -582,6 +633,44 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Monthly Performance Overview Bar Chart */}
+          <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-6">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h4 className="font-bold text-white text-base flex items-center gap-2">
+                  <TrendingUp className="w-4.5 h-4.5 text-emerald-400" /> Financial Year Performance Overview
+                </h4>
+                <p className="text-xs text-slate-500">Monthly total approved contributions vs. specific regular savings</p>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-lg">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>FISCAL YEAR: FY {financialYearLabel}</span>
+              </div>
+            </div>
+
+            <div className="h-80 w-full text-xs font-mono">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={financialYearPerformanceData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="label" stroke="#64748b" />
+                  <YAxis stroke="#64748b" />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: "#0f172a", borderColor: "#334155", borderRadius: "12px", color: "#f8fafc" }}
+                    labelStyle={{ color: "#94a3b8" }}
+                  />
+                  <Legend 
+                    verticalAlign="top" 
+                    height={36} 
+                    iconType="circle"
+                    wrapperStyle={{ paddingBottom: "10px", fontSize: "11px" }}
+                  />
+                  <Bar name="Total Contributions" dataKey="Total Contributions" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  <Bar name="Regular Savings" dataKey="Total Savings" fill="#10b981" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
