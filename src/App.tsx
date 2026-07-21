@@ -349,13 +349,32 @@ export default function App() {
     };
   }, [showNotificationsDropdown]);
 
-  const handleDismissNotification = async (notifId: string) => {
+  const handleDismissNotification = async (notif: ChamaNotification) => {
     if (!selectedChama || !user) return;
     try {
-      const notifRef = doc(db, "chamas", selectedChama.id, "notifications", notifId);
-      await deleteDoc(notifRef);
+      const notifRef = doc(db, "chamas", selectedChama.id, "notifications", notif.id);
+      if (!notif.userId) {
+        // Broadcast notification - mark as read for this user
+        await updateDoc(notifRef, {
+          readBy: arrayUnion(user.uid),
+        });
+      } else {
+        // Targeted notification - delete completely from Firestore
+        await deleteDoc(notifRef);
+      }
     } catch (err) {
       console.error("Error dismissing/deleting notification:", err);
+      // Construct compliance error structure
+      const errInfo = {
+        error: err instanceof Error ? err.message : String(err),
+        operationType: notif.userId ? "delete" : "update",
+        path: `chamas/${selectedChama.id}/notifications/${notif.id}`,
+        authInfo: {
+          userId: user.uid,
+          email: user.email,
+        }
+      };
+      console.error("Firestore Error info:", JSON.stringify(errInfo));
     }
   };
 
@@ -656,7 +675,7 @@ export default function App() {
                             e.preventDefault();
                             e.stopPropagation();
                             try {
-                              const promises = notifications.map((notif) => handleDismissNotification(notif.id));
+                              const promises = notifications.map((notif) => handleDismissNotification(notif));
                               await Promise.all(promises);
                             } catch (err) {
                               console.error("Failed to dismiss all notifications:", err);
@@ -681,7 +700,17 @@ export default function App() {
                           return (
                             <div 
                               key={notif.id} 
-                              className="p-3 hover:bg-slate-950/40 transition-colors flex gap-2.5 items-start text-xs group"
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (notif.link) {
+                                  setActiveTab(notif.link as any);
+                                }
+                                await handleDismissNotification(notif);
+                                setShowNotificationsDropdown(false);
+                              }}
+                              className="p-3 hover:bg-slate-950/60 transition-colors flex gap-2.5 items-start text-xs group cursor-pointer"
+                              title={notif.link ? `Go to ${notif.link}` : "Dismiss notification"}
                             >
                               <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
                                 notif.type === "alert" ? "bg-red-500 animate-pulse" :
@@ -698,18 +727,9 @@ export default function App() {
                                 <p className="text-[11px] text-slate-400 leading-relaxed pr-2">{notif.message}</p>
                                 <div className="flex items-center justify-between pt-1">
                                   {notif.link ? (
-                                    <button
-                                      onClick={async (e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setActiveTab(notif.link as any);
-                                        await handleDismissNotification(notif.id);
-                                        setShowNotificationsDropdown(false);
-                                      }}
-                                      className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 font-extrabold uppercase tracking-wider cursor-pointer"
-                                    >
+                                    <span className="text-[9px] font-mono text-emerald-400 group-hover:text-emerald-350 font-extrabold uppercase tracking-wider flex items-center gap-1">
                                       Go to Tab &rarr;
-                                    </button>
+                                    </span>
                                   ) : (
                                     <div />
                                   )}
@@ -717,7 +737,7 @@ export default function App() {
                                     onClick={async (e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
-                                      await handleDismissNotification(notif.id);
+                                      await handleDismissNotification(notif);
                                     }}
                                     className="text-[9px] font-mono text-slate-500 hover:text-slate-300 uppercase tracking-wider cursor-pointer font-bold opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity"
                                   >
