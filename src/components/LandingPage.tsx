@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from "firebase/auth";
+import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, googleProvider, db } from "../firebase";
 import { collection, getDocs, limit, query } from "firebase/firestore";
 import { 
@@ -19,7 +19,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 
 interface LandingPageProps {
-  onLoginSuccess: (simulatedUser?: any) => void;
+  onLoginSuccess: () => void;
 }
 
 export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
@@ -31,6 +31,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAuthGuide, setShowAuthGuide] = useState(false);
+  const [showOpNotAllowedGuide, setShowOpNotAllowedGuide] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -102,12 +103,16 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const handleGoogleLogin = async () => {
     setLoading(true);
     setError(null);
+    setShowOpNotAllowedGuide(false);
     try {
       await signInWithPopup(auth, googleProvider);
       onLoginSuccess();
     } catch (err: any) {
       console.error(err);
-      if (err.code === "auth/unauthorized-domain") {
+      if (err.code === "auth/operation-not-allowed") {
+        setError("Google Sign-In is not enabled in this Firebase project. Go to the Firebase Console > Build > Authentication > Sign-in method, click 'Add new provider', and enable 'Google'.");
+        setShowOpNotAllowedGuide(true);
+      } else if (err.code === "auth/unauthorized-domain") {
         setError("This domain is not authorized in your Firebase console. Please use 'Quick Guest Session' or add this URL to your Firebase Console Authorized Domains.");
         setShowAuthGuide(true);
       } else {
@@ -126,6 +131,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
     }
     setLoading(true);
     setError(null);
+    setShowOpNotAllowedGuide(false);
     try {
       if (isRegistering) {
         if (!name) {
@@ -140,28 +146,12 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
       onLoginSuccess();
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Authentication failed. Check your credentials.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGuestLogin = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await signInAnonymously(auth);
-      onLoginSuccess();
-    } catch (err: any) {
-      console.warn("Guest sign-in failed, falling back to simulated session:", err);
-      const simulatedUser = {
-        uid: "simulated-guest-user",
-        displayName: "Simulated Guest",
-        email: "guest-cooperator@chama.org",
-        photoURL: "https://api.dicebear.com/7.x/initials/svg?seed=Simulated%20Guest",
-        isAnonymous: true,
-      };
-      onLoginSuccess(simulatedUser);
+      if (err.code === "auth/operation-not-allowed") {
+        setError("Email/Password Sign-In is not enabled in this Firebase project. Go to the Firebase Console > Build > Authentication > Sign-in method, click 'Add new provider', and enable 'Email/Password'.");
+        setShowOpNotAllowedGuide(true);
+      } else {
+        setError(err.message || "Authentication failed. Check your credentials.");
+      }
     } finally {
       setLoading(false);
     }
@@ -201,13 +191,6 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
 
 
         <div className="flex items-center gap-2 sm:gap-4">
-          <button
-            onClick={handleInstallApp}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm shadow-emerald-600/10"
-          >
-            <Download className="w-4 h-4" />
-            <span>Install App</span>
-          </button>
           <button
             onClick={() => setShowShareModal(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-blue-600 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm"
@@ -330,18 +313,6 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 </form>
               </div>
 
-              {/* Guest Session Helper */}
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={handleGuestLogin}
-                  disabled={loading}
-                  className="text-slate-500 hover:text-emerald-600 text-xs font-semibold underline font-mono cursor-pointer"
-                >
-                  Quick Guest Session (No Sign In)
-                </button>
-              </div>
-
               {/* Helper domains block */}
               {showAuthGuide && (
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs text-slate-500">
@@ -360,6 +331,33 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                   >
                     Dismiss Guide
                   </button>
+                </div>
+              )}
+
+              {/* Operation Not Allowed Firebase Troubleshooting Guide */}
+              {showOpNotAllowedGuide && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3.5 text-xs text-slate-700">
+                  <div className="flex items-center gap-2 text-amber-700 font-bold font-mono uppercase text-[11px] tracking-wider">
+                    <ShieldCheck className="w-4 h-4" /> Firebase Auth Setup Needed
+                  </div>
+                  <p className="leading-relaxed text-[11px] text-slate-600">
+                    Your Firebase project does not have standard sign-in providers enabled. To fix this:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1.5 text-[11px] pl-1 text-slate-600">
+                    <li>Go to the <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-600 font-bold underline">Firebase Console</a></li>
+                    <li>Select your project, click on <strong className="text-slate-800">Authentication</strong></li>
+                    <li>Go to the <strong className="text-slate-800">Sign-in method</strong> tab</li>
+                    <li>Click <strong className="text-slate-800">Add new provider</strong> and enable <strong className="text-slate-800">Email/Password</strong> and <strong className="text-slate-800">Google</strong></li>
+                  </ol>
+                  <div className="pt-2 border-t border-amber-200 flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowOpNotAllowedGuide(false)}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-lg transition-all cursor-pointer text-center"
+                    >
+                      Dismiss Guide
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

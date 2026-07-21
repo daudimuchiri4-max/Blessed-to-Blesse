@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
-import { onAuthStateChanged, signOut, User, signInAnonymously, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, onSnapshot, collection, query, where, getDocs, deleteDoc } from "firebase/firestore";
+import { onAuthStateChanged, signOut, User, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc, onSnapshot, collection, query, where, getDocs, deleteDoc, updateDoc, arrayUnion } from "firebase/firestore";
 import { auth, db, googleProvider } from "./firebase";
-import { Chama, Member } from "./types";
+import { Chama, Member, ChamaNotification } from "./types";
 import DashboardTab from "./components/DashboardTab";
 import ContributionsTab from "./components/ContributionsTab";
 import InvestmentsTab from "./components/InvestmentsTab";
@@ -25,7 +25,9 @@ import {
   Share2,
   QrCode,
   Copy,
-  Check
+  Check,
+  Bell,
+  BellOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -83,6 +85,10 @@ export default function App() {
   const [selectedChama, setSelectedChama] = useState<Chama | null>(null);
   const [memberRecord, setMemberRecord] = useState<Member | null>(null);
   const [activeTab, setActiveTab] = useState<"dashboard" | "contributions" | "investments" | "loans" | "members" | "roles">("dashboard");
+
+  // Notifications State
+  const [notifications, setNotifications] = useState<ChamaNotification[]>([]);
+  const [showNotificationsDropdown, setShowNotificationsDropdown] = useState(false);
 
   // Modal states
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -289,6 +295,52 @@ export default function App() {
     return () => unsubscribeMember();
   }, [selectedChama?.id, user?.uid, user?.email]);
 
+  // Real-time subscribe to notifications in selected Chama
+  useEffect(() => {
+    if (!selectedChama || !user) {
+      setNotifications([]);
+      return;
+    }
+
+    const notificationsColl = collection(db, "chamas", selectedChama.id, "notifications");
+    const unsubscribeNotifications = onSnapshot(
+      notificationsColl,
+      (snapshot) => {
+        const list: ChamaNotification[] = [];
+        snapshot.forEach((docSnap) => {
+          const notif = { id: docSnap.id, ...docSnap.data() } as ChamaNotification;
+          // Filter: either broadcast (no userId) OR targeted specifically to this user
+          if (!notif.userId || notif.userId === user.uid) {
+            // If the user has NOT marked it as read (userId not in readBy array)
+            if (!notif.readBy || !notif.readBy.includes(user.uid)) {
+              list.push(notif);
+            }
+          }
+        });
+        // Sort by createdAt descending
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setNotifications(list);
+      },
+      (error) => {
+        console.error("Error reading notifications:", error);
+      }
+    );
+
+    return () => unsubscribeNotifications();
+  }, [selectedChama?.id, user?.uid]);
+
+  const handleDismissNotification = async (notifId: string) => {
+    if (!selectedChama || !user) return;
+    try {
+      const notifRef = doc(db, "chamas", selectedChama.id, "notifications", notifId);
+      await updateDoc(notifRef, {
+        readBy: arrayUnion(user.uid),
+      });
+    } catch (err) {
+      console.error("Error dismissing notification:", err);
+    }
+  };
+
   const handleLogout = async () => {
     setUser(null);
     setSelectedChama(null);
@@ -389,23 +441,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <LandingPage onLoginSuccess={async (simulatedUser) => {
-      if (simulatedUser) {
-        try {
-          const userRef = doc(db, "users", simulatedUser.uid);
-          await setDoc(userRef, {
-            id: simulatedUser.uid,
-            name: simulatedUser.displayName,
-            email: simulatedUser.email,
-            photoURL: simulatedUser.photoURL,
-            createdAt: new Date().toISOString(),
-          }, { merge: true });
-        } catch (dbErr) {
-          console.error("Failed to write simulated user to DB:", dbErr);
-        }
-        setUser(simulatedUser);
-      }
-    }} />;
+    return <LandingPage onLoginSuccess={() => {}} />;
   }
 
   if (!selectedChama) {
@@ -495,14 +531,113 @@ export default function App() {
               />
             </button>
 
-            {user?.isAnonymous && (
+            {/* Notification Bell with Dropdown */}
+            <div className="relative">
               <button
-                onClick={() => setShowProfileSettings(true)}
-                className="text-[10px] font-mono bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-2.5 py-1.5 rounded-lg font-bold cursor-pointer transition-colors"
+                onClick={() => setShowNotificationsDropdown(!showNotificationsDropdown)}
+                className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 hover:bg-slate-950 transition-all cursor-pointer flex items-center justify-center relative"
+                title="View notifications"
               >
-                Link Google
+                <Bell className="w-4 h-4" />
+                {notifications.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white font-mono text-[9px] font-extrabold w-4.5 h-4.5 rounded-full flex items-center justify-center animate-pulse">
+                    {notifications.length}
+                  </span>
+                )}
               </button>
-            )}
+
+              {/* Notification Dropdown List */}
+              <AnimatePresence>
+                {showNotificationsDropdown && (
+                  <>
+                    <div 
+                      className="fixed inset-0 z-40" 
+                      onClick={() => setShowNotificationsDropdown(false)} 
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl z-50 overflow-hidden py-1"
+                    >
+                      <div className="px-4 py-3 border-b border-slate-800/80 flex items-center justify-between">
+                        <span className="text-xs font-bold font-sans text-slate-200 tracking-wider uppercase">Notifications</span>
+                        {notifications.length > 0 && (
+                          <button
+                            onClick={async () => {
+                              // Dismiss all notifications
+                              for (const notif of notifications) {
+                                await handleDismissNotification(notif.id);
+                              }
+                            }}
+                            className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 uppercase tracking-wider font-extrabold cursor-pointer"
+                          >
+                            Dismiss All
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/40 scrollbar-none">
+                        {notifications.length === 0 ? (
+                          <div className="px-4 py-8 text-center text-xs text-slate-500 space-y-2">
+                            <BellOff className="w-6 h-6 mx-auto text-slate-700" />
+                            <p className="font-mono text-[9px] tracking-wider uppercase">All Caught Up</p>
+                            <p>No new alerts from your cooperative.</p>
+                          </div>
+                        ) : (
+                          notifications.map((notif) => {
+                            return (
+                              <div 
+                                key={notif.id} 
+                                className="p-3 hover:bg-slate-950/40 transition-colors flex gap-2.5 items-start text-xs group"
+                              >
+                                <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                                  notif.type === "alert" ? "bg-red-500 animate-pulse" :
+                                  notif.type === "warning" ? "bg-amber-500" :
+                                  notif.type === "success" ? "bg-emerald-500" : "bg-blue-500"
+                                }`} />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-start justify-between gap-1">
+                                    <span className="font-semibold text-slate-200 block truncate max-w-[170px]">{notif.title}</span>
+                                    <span className="text-[8px] font-mono text-slate-500 shrink-0 mt-0.5">
+                                      {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 leading-relaxed pr-2">{notif.message}</p>
+                                  <div className="flex items-center justify-between pt-1">
+                                    {notif.link ? (
+                                      <button
+                                        onClick={() => {
+                                          setActiveTab(notif.link as any);
+                                          handleDismissNotification(notif.id);
+                                          setShowNotificationsDropdown(false);
+                                        }}
+                                        className="text-[9px] font-mono text-emerald-400 hover:text-emerald-300 font-extrabold uppercase tracking-wider cursor-pointer"
+                                      >
+                                        Go to Tab &rarr;
+                                      </button>
+                                    ) : (
+                                      <div />
+                                    )}
+                                    <button
+                                      onClick={() => handleDismissNotification(notif.id)}
+                                      className="text-[9px] font-mono text-slate-500 hover:text-slate-300 uppercase tracking-wider cursor-pointer font-bold opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      Dismiss
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button
               onClick={() => setShowShareModal(true)}
               className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-emerald-500/40 hover:text-emerald-400 text-slate-450 hover:bg-slate-950 transition-all cursor-pointer flex items-center gap-1.5"
@@ -793,26 +928,6 @@ export default function App() {
                   />
                   <p className="text-[10px] text-slate-500">Your custom avatar will update automatically based on your initials.</p>
                 </div>
-
-                {user?.isAnonymous && (
-                  <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl space-y-3">
-                    <div>
-                      <p className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-emerald-400" /> Link Google Account
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        Upgrade your temporary session to a permanent Google account. Your Chama savings, logs, and loans will carry over seamlessly!
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleLinkGoogle}
-                      className="w-full py-2 bg-white hover:bg-slate-100 text-slate-950 text-xs font-bold rounded-lg cursor-pointer transition-colors flex items-center justify-center gap-2"
-                    >
-                      Sign In with Google
-                    </button>
-                  </div>
-                )}
 
                 <div className="pt-4 border-t border-slate-800 flex justify-end gap-3">
                   <button

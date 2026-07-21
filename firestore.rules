@@ -62,6 +62,11 @@ service cloud.firestore {
       match /loans/{loanId} {
         allow read, write: if true;
       }
+
+      // 7. Notifications Sub-collection
+      match /notifications/{notificationId} {
+        allow read, write: if true;
+      }
     }
   }
 }

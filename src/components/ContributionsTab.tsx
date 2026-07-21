@@ -4,6 +4,7 @@ import { db } from "../firebase";
 import { Chama, Contribution, Member, Loan } from "../types";
 import { Plus, Check, X, Filter, DollarSign, Wallet, Calendar, AlertCircle, FileText, CheckCircle, ChevronLeft, ChevronRight, Clock, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { createChamaNotification } from "../utils/notifications";
 
 // Helper: Get all due dates in a given month
 const getDueDatesInMonth = (year: number, month: number, createdAtStr: string, frequency: string) => {
@@ -175,6 +176,23 @@ interface ContributionsTabProps {
 export default function ContributionsTab({ chama, currentUserId, memberRole, currentUserDisplayName }: ContributionsTabProps) {
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Helper: Get total approved savings contributions of a member
+  const getMemberApprovedSavings = (userId: string) => {
+    return contributions
+      .filter((c) => (c.userId === userId) && c.type === "savings" && c.status === "approved")
+      .reduce((sum, c) => sum + c.amount, 0);
+  };
+
+  // Filtered list of automatic deductions (debits) from shares
+  const autoDeductions = contributions.filter((c) => {
+    const isAuto = c.notes && c.notes.includes("Automatic deduction") && c.amount < 0;
+    if (!isAuto) return false;
+    if (memberRole === "member" && c.userId !== currentUserId) {
+      return false;
+    }
+    return true;
+  });
   
   // Filter states
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -278,6 +296,128 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
     return () => unsubscribe();
   }, [chama.id]);
 
+  // Effect to automatically run 10th of the month deductions
+  useEffect(() => {
+    if (loading || members.length === 0 || contributions.length === 0 || !chama.contributionAmount || chama.frequency !== "monthly") {
+      return;
+    }
+
+    const scanAndRunDeductions = async () => {
+      const today = new Date();
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth();
+
+      // Scan from the year the Chama was created, up to current year/month
+      const creationDate = chama.createdAt ? new Date(chama.createdAt) : new Date(2026, 0, 1);
+      const startYear = isNaN(creationDate.getTime()) ? 2026 : creationDate.getFullYear();
+      const startMonth = isNaN(creationDate.getTime()) ? 0 : creationDate.getMonth();
+
+      let y = startYear;
+      let m = startMonth;
+
+      while (y < currentYear || (y === currentYear && m <= currentMonth)) {
+        const tenthOfThatMonth = new Date(y, m, 10);
+        
+        // If today is on or past the 10th of this month, we verify compliance
+        if (today >= tenthOfThatMonth) {
+          for (const member of members) {
+            const memberId = member.userId || member.id;
+            
+            // Calculate total standard positive savings contributions in this month
+            const totalPaidInMonth = contributions
+              .filter((c) => {
+                if (c.userId !== memberId || c.status !== "approved" || c.amount <= 0) return false;
+                const cDate = new Date(c.date);
+                return cDate.getFullYear() === y && cDate.getMonth() === m && c.type === "savings";
+              })
+              .reduce((sum, c) => sum + c.amount, 0);
+
+            const shortfall = chama.contributionAmount - totalPaidInMonth;
+
+            if (shortfall > 0) {
+              // Check if we already processed an automatic deduction for this month
+              const hasDeducted = contributions.some((c) => {
+                if (c.userId !== memberId || c.status !== "approved" || c.amount >= 0) return false;
+                const cDate = new Date(c.date);
+                return cDate.getFullYear() === y && cDate.getMonth() === m && c.notes.includes("Automatic deduction from shares");
+              });
+
+              if (!hasDeducted) {
+                // Determine available savings
+                const currentSavings = getMemberApprovedSavings(memberId);
+
+                // Deduct if they have any savings to cover the shortfall (or up to their total savings)
+                if (currentSavings > 0) {
+                  const deductionAmount = Math.min(shortfall, currentSavings);
+                  try {
+                    const timestampStr = new Date(y, m, 10, 12, 0, 0).toISOString();
+                    
+                    // 1. Create Negative Contribution (Deduction from Shares)
+                    const deductionData = {
+                      userId: memberId,
+                      memberName: member.name,
+                      amount: -deductionAmount,
+                      date: timestampStr,
+                      type: "savings" as const,
+                      status: "approved" as const,
+                      notes: `Automatic deduction from shares due to missed monthly contribution [${y}-${m + 1}]`,
+                      approvedBy: "system",
+                      approvedAt: new Date().toISOString()
+                    };
+                    await addDoc(collection(db, "chamas", chama.id, "contributions"), deductionData);
+
+                    // 2. Create Positive Contribution (Covered Monthly Payment)
+                    const coverageData = {
+                      userId: memberId,
+                      memberName: member.name,
+                      amount: deductionAmount,
+                      date: timestampStr,
+                      type: "other" as const, // Use 'other' so it doesn't double-count as standard savings, but satisfies compliance
+                      status: "approved" as const,
+                      notes: `Monthly contribution covered by automatic share deduction [${y}-${m + 1}]`,
+                      approvedBy: "system",
+                      approvedAt: new Date().toISOString()
+                    };
+                    await addDoc(collection(db, "chamas", chama.id, "contributions"), coverageData);
+
+                    // Send system notifications
+                    await createChamaNotification(chama.id, {
+                      title: "Automated Share Deduction",
+                      message: `${member.name}'s missed monthly contribution was automatically deducted from their shares: -${deductionAmount.toLocaleString()} ${chama.currency}.`,
+                      type: "warning",
+                      link: "contributions",
+                    });
+
+                    await createChamaNotification(chama.id, {
+                      title: "Automated Share Deduction",
+                      message: `Your missed monthly contribution was automatically deducted from your shares: -${deductionAmount.toLocaleString()} ${chama.currency}.`,
+                      type: "alert",
+                      userId: memberId,
+                      link: "contributions",
+                    });
+
+                    console.log(`Successfully processed automatic deduction of ${deductionAmount} for ${member.name} for ${y}-${m + 1}`);
+                  } catch (err) {
+                    console.error("Error executing automatic share deduction:", err);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Advance to next month
+        m++;
+        if (m > 11) {
+          m = 0;
+          y++;
+        }
+      }
+    };
+
+    scanAndRunDeductions();
+  }, [loading, members, contributions, chama.id, chama.contributionAmount, chama.frequency, chama.createdAt]);
+
   const handleRecordContribution = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedAmount = parseFloat(amount);
@@ -302,6 +442,13 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
       };
 
       await addDoc(collection(db, "chamas", chama.id, "contributions"), contributionData);
+
+      await createChamaNotification(chama.id, {
+        title: "Contribution Logged",
+        message: `${contributionData.memberName} submitted a contribution of ${parsedAmount.toLocaleString()} ${chama.currency} (${type}) for verification.`,
+        type: "info",
+        link: "contributions",
+      });
 
       // Reset
       setAmount("");
@@ -330,6 +477,23 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
       // 2. Increment Chama's totalSavings
       await updateDoc(doc(db, "chamas", chama.id), {
         totalSavings: increment(contrib.amount),
+      });
+
+      // Send a targeted notification to the contributor
+      await createChamaNotification(chama.id, {
+        title: "Contribution Approved",
+        message: `Your contribution of ${contrib.amount.toLocaleString()} ${chama.currency} (${contrib.type}) has been approved by the treasurer.`,
+        type: "success",
+        userId: contrib.userId,
+        link: "contributions",
+      });
+
+      // Send a general notification to all members about group savings updating
+      await createChamaNotification(chama.id, {
+        title: "Savings Pool Updated",
+        message: `Verified savings contribution of ${contrib.amount.toLocaleString()} ${chama.currency} from ${contrib.memberName} was added to the cooperative pool.`,
+        type: "info",
+        link: "contributions",
       });
 
       // 3. If loan repayment, find their active loan and pay it down
@@ -361,12 +525,20 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
     }
   };
 
-  const handleReject = async (contribId: string) => {
+  const handleReject = async (contrib: Contribution) => {
     try {
-      await updateDoc(doc(db, "chamas", chama.id, "contributions", contribId), {
+      await updateDoc(doc(db, "chamas", chama.id, "contributions", contrib.id), {
         status: "rejected",
         approvedBy: currentUserId,
         approvedAt: new Date().toISOString(),
+      });
+
+      await createChamaNotification(chama.id, {
+        title: "Contribution Declined",
+        message: `Your contribution of ${contrib.amount.toLocaleString()} ${chama.currency} (${contrib.type}) was rejected. Please contact your treasurer for details.`,
+        type: "alert",
+        userId: contrib.userId,
+        link: "contributions",
       });
     } catch (err) {
       console.error("Error rejecting contribution:", err);
@@ -399,6 +571,24 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
           <Plus className="w-4 h-4 stroke-[3]" /> Record Contribution
         </button>
       </div>
+
+      {/* 10th of Month Automated Share Deduction Policy Notice */}
+      {chama.frequency === "monthly" && chama.contributionAmount > 0 && (
+        <div className="p-4 bg-slate-950 border border-slate-900 rounded-2xl flex items-start gap-3.5 text-xs text-slate-400">
+          <Sparkles className="w-5 h-5 text-amber-500 shrink-0 mt-0.5 animate-pulse" />
+          <div className="space-y-1.5 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-slate-200">10th Monthly Auto-Deduction Rule is ACTIVE</span>
+              <span className="text-[9px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded uppercase">
+                COOPERATIVE LAW ENFORCED
+              </span>
+            </div>
+            <p className="leading-relaxed">
+              If members miss their monthly agreed savings contribution (<strong>{chama.contributionAmount.toLocaleString()} {chama.currency}</strong>) by the <strong>10th of any month</strong>, the outstanding shortfall will be automatically deducted from their existing shares (savings pool) and recorded as a compliant transaction.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Sub-tabs switcher */}
       <div className="flex border-b border-slate-900 gap-6">
@@ -784,8 +974,20 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                           {c.type === "savings" && c.status === "approved" && (
                             <>
                               <span>•</span>
-                              <span className="text-emerald-400 font-bold font-mono bg-emerald-500/5 px-1 py-0.5 rounded border border-emerald-500/10">
-                                +{(c.amount / (chama.sharePrice || 2000)).toFixed(1)} Shares
+                              <span className={`font-bold font-mono px-1 py-0.5 rounded border ${
+                                c.amount >= 0 
+                                  ? "text-emerald-400 bg-emerald-500/5 border-emerald-500/10" 
+                                  : "text-amber-400 bg-amber-500/5 border-amber-500/10"
+                              }`}>
+                                {c.amount >= 0 ? "+" : ""}{(c.amount / (chama.sharePrice || 2000)).toFixed(1)} Shares
+                              </span>
+                            </>
+                          )}
+                          {c.notes && c.notes.includes("Automatic deduction") && (
+                            <>
+                              <span>•</span>
+                              <span className="text-[8px] font-mono font-extrabold bg-amber-500/15 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded uppercase">
+                                AUTO-DEDUCTED
                               </span>
                             </>
                           )}
@@ -795,7 +997,9 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="font-mono font-extrabold text-white text-sm">+{c.amount.toLocaleString()} {chama.currency}</p>
+                        <p className={`font-mono font-extrabold text-sm ${c.amount < 0 ? "text-amber-400" : "text-white"}`}>
+                          {c.amount >= 0 ? "+" : ""}{c.amount.toLocaleString()} {chama.currency}
+                        </p>
                         <span className={`inline-block text-[9px] font-mono font-extrabold px-2 py-0.5 rounded uppercase mt-1 ${
                           c.status === "approved" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" :
                           c.status === "pending" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : 
@@ -810,71 +1014,120 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
               )}
             </div>
 
-            {/* Right Side: Treasurer Approval Panel */}
-            <div className="lg:col-span-4 p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-900 pb-3">
-                <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
-                  Treasurer Approvals
-                </h4>
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
-                  {isTreasurer ? "TREASURER ACCESS" : "VIEW ONLY"}
-                </span>
+            {/* Right Side: Column Panels */}
+            <div className="lg:col-span-4 space-y-6">
+              {/* Treasurer Approval Panel */}
+              <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+                  <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                    Treasurer Approvals
+                  </h4>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase font-bold">
+                    {isTreasurer ? "TREASURER ACCESS" : "VIEW ONLY"}
+                  </span>
+                </div>
+
+                {!isTreasurer ? (
+                  <div className="p-4 bg-slate-950/20 border border-slate-900 rounded-xl space-y-2 text-xs text-slate-500 text-center">
+                    <AlertCircle className="w-6 h-6 mx-auto text-slate-700" />
+                    <p className="font-mono text-[10px]">APPROVALS RESTRICTED</p>
+                    <p>Only the group Treasurer is authorized to verify and approve pending contributions.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <p className="text-[11px] text-slate-400">
+                      Incoming member payments waiting for bank statement verification. Verify receipts before approving.
+                    </p>
+                    
+                    <div className="space-y-3">
+                      {contributions.filter((c) => c.status === "pending").length === 0 ? (
+                        <div className="p-4 bg-slate-950/30 border border-slate-900 rounded-xl text-center text-xs text-slate-500 space-y-2">
+                          <CheckCircle className="w-6 h-6 mx-auto text-slate-700" />
+                          <p className="font-mono text-[10px]">ALL CLEAR</p>
+                          <p>No contributions waiting for approval.</p>
+                        </div>
+                      ) : (
+                        contributions
+                          .filter((c) => c.status === "pending")
+                          .map((c) => (
+                            <div key={c.id} className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-2.5 text-xs">
+                              <div>
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-slate-200">{c.memberName}</span>
+                                  <span className="font-mono text-emerald-400 font-extrabold">{c.amount.toLocaleString()} {chama.currency}</span>
+                                </div>
+                                <p className="text-[9px] text-slate-500 font-mono uppercase pt-0.5">{c.type} • {new Date(c.date).toLocaleDateString()}</p>
+                                {c.notes && (
+                                  <p className="text-[10px] text-slate-400 mt-1 italic border-l border-slate-800 pl-2">"{c.notes}"</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  onClick={() => handleReject(c)}
+                                  className="flex-1 bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" /> REJECT
+                                </button>
+                                <button
+                                  onClick={() => handleApprove(c)}
+                                  className="flex-1 bg-emerald-500/10 hover:bg-emerald-500 hover:text-slate-950 border border-emerald-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <Check className="w-3.5 h-3.5 stroke-[3]" /> APPROVE
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {!isTreasurer ? (
-                <div className="p-4 bg-slate-950/20 border border-slate-900 rounded-xl space-y-2 text-xs text-slate-500 text-center">
-                  <AlertCircle className="w-6 h-6 mx-auto text-slate-700" />
-                  <p className="font-mono text-[10px]">APPROVALS RESTRICTED</p>
-                  <p>Only the group Treasurer is authorized to verify and approve pending contributions.</p>
+              {/* Auto-Deducted Missed Payments Log */}
+              <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+                  <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-amber-500" /> Share Auto-Deductions
+                  </h4>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 uppercase font-bold">
+                    {autoDeductions.length} Logged
+                  </span>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-[11px] text-slate-400">
-                    Incoming member payments waiting for bank statement verification. Verify receipts before approving.
-                  </p>
-                  
-                  <div className="space-y-3">
-                    {contributions.filter((c) => c.status === "pending").length === 0 ? (
-                      <div className="p-4 bg-slate-950/30 border border-slate-900 rounded-xl text-center text-xs text-slate-500 space-y-2">
-                        <CheckCircle className="w-6 h-6 mx-auto text-slate-700" />
-                        <p className="font-mono text-[10px]">ALL CLEAR</p>
-                        <p>No contributions waiting for approval.</p>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                  List of automated share debits executed on the 10th of each month for non-compliant members.
+                </p>
+
+                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                  {autoDeductions.length === 0 ? (
+                    <div className="p-4 bg-slate-950/30 border border-slate-900 rounded-xl text-center text-xs text-slate-500 space-y-1">
+                      <CheckCircle className="w-5 h-5 mx-auto text-slate-600" />
+                      <p className="font-mono text-[9px] uppercase font-bold tracking-wider text-slate-400">Perfect Compliance</p>
+                      <p className="text-[10px] text-slate-500">No automated share deductions logged.</p>
+                    </div>
+                  ) : (
+                    autoDeductions.map((c) => (
+                      <div key={c.id} className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-200">{c.memberName}</span>
+                          <span className="font-mono text-amber-450 font-extrabold text-[11px] bg-amber-500/5 border border-amber-500/10 px-1.5 py-0.5 rounded">
+                            {c.amount.toLocaleString()} {chama.currency}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px] font-mono text-slate-500">
+                          <span>Debit Date: {new Date(c.date).toLocaleDateString()}</span>
+                          <span className="text-amber-500 font-extrabold uppercase tracking-widest text-[8px]">SHARES DEBITED</span>
+                        </div>
+                        {c.notes && (
+                          <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-950/60 p-2 rounded border border-slate-900/60 italic">
+                            "{c.notes}"
+                          </p>
+                        )}
                       </div>
-                    ) : (
-                      contributions
-                        .filter((c) => c.status === "pending")
-                        .map((c) => (
-                          <div key={c.id} className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-2.5 text-xs">
-                            <div>
-                              <div className="flex items-center justify-between">
-                                <span className="font-bold text-slate-200">{c.memberName}</span>
-                                <span className="font-mono text-emerald-400 font-extrabold">{c.amount.toLocaleString()} {chama.currency}</span>
-                              </div>
-                              <p className="text-[9px] text-slate-500 font-mono uppercase pt-0.5">{c.type} • {new Date(c.date).toLocaleDateString()}</p>
-                              {c.notes && (
-                                <p className="text-[10px] text-slate-400 mt-1 italic border-l border-slate-800 pl-2">"{c.notes}"</p>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 pt-1">
-                              <button
-                                onClick={() => handleReject(c.id)}
-                                className="flex-1 bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
-                              >
-                                <X className="w-3 h-3" /> REJECT
-                              </button>
-                              <button
-                                onClick={() => handleApprove(c)}
-                                className="flex-1 bg-emerald-500/10 hover:bg-emerald-500 hover:text-slate-950 border border-emerald-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
-                              >
-                                <Check className="w-3.5 h-3.5 stroke-[3]" /> APPROVE
-                              </button>
-                            </div>
-                          </div>
-                        ))
-                    )}
-                  </div>
+                    ))
+                  )}
                 </div>
-              )}
+              </div>
             </div>
 
           </div>

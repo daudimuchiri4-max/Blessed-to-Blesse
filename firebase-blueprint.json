@@ -101,6 +101,22 @@
         "approvedBy": { "type": "string", "description": "The UID of the treasurer/chairperson who approved it" }
       },
       "required": ["id", "userId", "memberName", "amount", "interestRate", "repaymentTermMonths", "amountRepaid", "status", "dateRequested"]
+    },
+    "ChamaNotification": {
+      "title": "Chama Notification",
+      "description": "System or admin-generated notification broadcast or targeted to a specific user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique notification identifier" },
+        "title": { "type": "string", "description": "The header/title of the notification" },
+        "message": { "type": "string", "description": "Detailed text body of the notification" },
+        "type": { "type": "string", "enum": ["info", "success", "warning", "alert"], "description": "Visual type / priority of the notification" },
+        "userId": { "type": "string", "description": "Optional user UID. If empty, the notification is broadcast to all members" },
+        "readBy": { "type": "array", "description": "Array of user UIDs who have read/dismissed this notification" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp when the notification was created" },
+        "link": { "type": "string", "description": "The tab ID to redirect the user to when clicked" }
+      },
+      "required": ["id", "title", "message", "type", "readBy", "createdAt"]
     }
   },
   "firestore": {
@@ -127,6 +143,10 @@
     "/chamas/{chamaId}/loans/{loanId}": {
       "schema": "Loan",
       "description": "Sub-collection tracking internal member loans"
+    },
+    "/chamas/{chamaId}/notifications/{notificationId}": {
+      "schema": "ChamaNotification",
+      "description": "Sub-collection tracking notifications inside a Chama"
     }
   }
 }

@@ -82,3 +82,14 @@ export interface Loan {
   dueDate: string;
   approvedBy?: string;
 }
+
+export interface ChamaNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: "info" | "success" | "warning" | "alert";
+  userId?: string; // empty means broadcast to everyone
+  readBy: string[]; // array of userIds
+  createdAt: string;
+  link?: string; // tab ID e.g. "contributions", "loans"
+}

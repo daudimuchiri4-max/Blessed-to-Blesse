@@ -4,6 +4,7 @@ import { db } from "../firebase";
 import { Chama, Investment, Member } from "../types";
 import { Plus, TrendingUp, Landmark, ShieldCheck, DollarSign, Calendar, Edit2, AlertCircle, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { createChamaNotification } from "../utils/notifications";
 
 interface InvestmentsTabProps {
   chama: Chama;
@@ -103,6 +104,13 @@ export default function InvestmentsTab({ chama, currentUserId, memberRole }: Inv
       };
 
       await addDoc(collection(db, "chamas", chama.id, "investments"), investmentData);
+      
+      await createChamaNotification(chama.id, {
+        title: "Investment Logged",
+        message: `A new investment "${title}" of ${cost.toLocaleString()} ${chama.currency} has been registered under active assets.`,
+        type: "success",
+        link: "investments",
+      });
       
       // Sync the parent Chama's aggregated investments
       await syncParentTotalInvestments();

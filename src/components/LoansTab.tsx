@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { collection, onSnapshot, doc, addDoc, updateDoc, increment } from "firebase/firestore";
 import { db } from "../firebase";
-import { Chama, Loan, Member } from "../types";
-import { Plus, Wallet, ShieldCheck, Check, X, Calendar, DollarSign, Percent, AlertCircle, RefreshCw, HelpCircle } from "lucide-react";
+import { Chama, Loan, Member, Contribution } from "../types";
+import { Plus, Wallet, ShieldCheck, Check, X, Calendar, DollarSign, Percent, AlertCircle, RefreshCw, HelpCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { createChamaNotification } from "../utils/notifications";
 
 interface LoansTabProps {
   chama: Chama;
@@ -12,9 +13,24 @@ interface LoansTabProps {
   currentUserDisplayName: string;
 }
 
+interface AmortizationRow {
+  installmentNo: number;
+  dueDate: string;
+  installmentAmount: number;
+  principalPortion: number;
+  interestPortion: number;
+  remainingBalance: number;
+  status: "paid" | "partially_paid" | "unpaid";
+  amountPaidInRow: number;
+}
+
 export default function LoansTab({ chama, currentUserId, memberRole, currentUserDisplayName }: LoansTabProps) {
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [contributions, setContributions] = useState<Contribution[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Amortization Schedules expanded state
+  const [expandedSchedules, setExpandedSchedules] = useState<Record<string, boolean>>({});
 
   // Modal / Form states
   const [showRequestModal, setShowRequestModal] = useState(false);
@@ -25,6 +41,84 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = memberRole === "super_admin" || memberRole === "chairperson" || chama.createdBy === currentUserId;
+
+  // Helper: get total approved savings contributions of a member
+  const getMemberApprovedSavings = (userId: string) => {
+    return contributions
+      .filter((c) => (c.userId === userId) && c.type === "savings" && c.status === "approved")
+      .reduce((sum, c) => sum + c.amount, 0);
+  };
+
+  // Helper: Generate amortization schedule
+  const generateAmortizationSchedule = (loan: Loan): AmortizationRow[] => {
+    const term = loan.repaymentTermMonths;
+    const principal = loan.amount;
+    const rate = loan.interestRate;
+    const totalPayable = principal * (1 + rate / 100);
+    const installmentAmount = totalPayable / term;
+    const principalPortion = principal / term;
+    const interestPortion = (principal * (rate / 100)) / term;
+
+    const rows: AmortizationRow[] = [];
+    let accumRepaid = loan.amountRepaid;
+
+    const startDateObj = new Date(loan.dateRequested);
+
+    for (let i = 1; i <= term; i++) {
+      const dueDateObj = new Date(startDateObj);
+      dueDateObj.setMonth(startDateObj.getMonth() + i);
+
+      let rowStatus: "paid" | "partially_paid" | "unpaid" = "unpaid";
+      let amountPaidInRow = 0;
+
+      if (accumRepaid >= installmentAmount) {
+        rowStatus = "paid";
+        amountPaidInRow = installmentAmount;
+        accumRepaid -= installmentAmount;
+      } else if (accumRepaid > 0) {
+        rowStatus = "partially_paid";
+        amountPaidInRow = accumRepaid;
+        accumRepaid = 0;
+      } else {
+        rowStatus = "unpaid";
+        amountPaidInRow = 0;
+      }
+
+      const remainingBalance = Math.max(totalPayable - (i * installmentAmount), 0);
+
+      rows.push({
+        installmentNo: i,
+        dueDate: dueDateObj.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }),
+        installmentAmount,
+        principalPortion,
+        interestPortion,
+        remainingBalance,
+        status: rowStatus,
+        amountPaidInRow
+      });
+    }
+
+    return rows;
+  };
+
+  // Subscribe to contributions in real-time
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "chamas", chama.id, "contributions"),
+      (snapshot) => {
+        const list: Contribution[] = [];
+        snapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as Contribution);
+        });
+        setContributions(list);
+      },
+      (error) => {
+        console.error("Error loading contributions:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [chama.id]);
 
   // Subscribe to loans in real-time
   useEffect(() => {
@@ -63,6 +157,20 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
       return;
     }
 
+    // Verify member shares/savings (limit is 3x of owned shares value/savings)
+    const mySavings = getMemberApprovedSavings(currentUserId);
+    const maxEligibleLoan = mySavings * 3;
+
+    if (mySavings <= 0) {
+      setError(`Access denied. You do not own any shares. Members must have approved savings/shares to qualify for cooperative credit.`);
+      return;
+    }
+
+    if (principal > maxEligibleLoan) {
+      setError(`Request exceeds cooperative credit limit. Based on your owned shares (${(mySavings / (chama.sharePrice || 2000)).toFixed(1)} Units worth ${mySavings.toLocaleString()} ${chama.currency}), your maximum eligible loan amount is ${maxEligibleLoan.toLocaleString()} ${chama.currency} (3x of your shares).`);
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
@@ -84,6 +192,13 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
       };
 
       await addDoc(collection(db, "chamas", chama.id, "loans"), loanData);
+
+      await createChamaNotification(chama.id, {
+        title: "Loan Request Submitted",
+        message: `${loanData.memberName} requested a loan of ${principal.toLocaleString()} ${chama.currency} for ${term} months.`,
+        type: "warning",
+        link: "loans",
+      });
 
       // Reset
       setAmount("");
@@ -112,16 +227,41 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
         // Draw loan amount from savings pool
         totalSavings: increment(-loan.amount),
       });
+
+      // Send a targeted notification to the borrower
+      await createChamaNotification(chama.id, {
+        title: "Loan Approved",
+        message: `Your loan of ${loan.amount.toLocaleString()} ${chama.currency} has been approved and advanced.`,
+        type: "success",
+        userId: loan.userId,
+        link: "loans",
+      });
+
+      // Send a general notification to all members about credit disbursement
+      await createChamaNotification(chama.id, {
+        title: "Loan Disbursed",
+        message: `Cooperative loan of ${loan.amount.toLocaleString()} ${chama.currency} has been approved and disbursed to ${loan.memberName}.`,
+        type: "info",
+        link: "loans",
+      });
     } catch (err) {
       console.error("Error approving loan:", err);
     }
   };
 
-  const handleRejectLoan = async (loanId: string) => {
+  const handleRejectLoan = async (loan: Loan) => {
     try {
-      await updateDoc(doc(db, "chamas", chama.id, "loans", loanId), {
+      await updateDoc(doc(db, "chamas", chama.id, "loans", loan.id), {
         status: "rejected",
         approvedBy: currentUserId,
+      });
+
+      await createChamaNotification(chama.id, {
+        title: "Loan Request Declined",
+        message: `Your loan request of ${loan.amount.toLocaleString()} ${chama.currency} was declined by the group officials.`,
+        type: "alert",
+        userId: loan.userId,
+        link: "loans",
       });
     } catch (err) {
       console.error("Error rejecting loan:", err);
@@ -251,6 +391,87 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                         </div>
                       </div>
                     )}
+
+                    {/* Amortization Schedule Section */}
+                    {(l.status === "active" || l.status === "repaid") && (
+                      <div className="pt-2 border-t border-slate-900/40 space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSchedules(prev => ({ ...prev, [l.id]: !prev[l.id] }))}
+                          className="flex items-center gap-1 text-[10px] font-mono text-emerald-400 hover:text-emerald-300 font-bold uppercase tracking-wider cursor-pointer transition-colors"
+                        >
+                          {expandedSchedules[l.id] ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5" />
+                              <span>Hide Amortization Schedule</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5" />
+                              <span>View Amortization Schedule</span>
+                            </>
+                          )}
+                        </button>
+
+                        <AnimatePresence>
+                          {expandedSchedules[l.id] && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="bg-slate-950/60 rounded-xl border border-slate-900/80 p-3 space-y-2 pt-3 mt-1">
+                                <div className="text-[10px] font-mono text-slate-400 font-bold uppercase tracking-wider pb-1.5 border-b border-slate-900/60 flex items-center justify-between">
+                                  <span>Repayment Breakdown</span>
+                                  <span className="text-emerald-500">{l.repaymentTermMonths} Months Flat</span>
+                                </div>
+                                <div className="overflow-x-auto scrollbar-none">
+                                  <table className="w-full text-left border-collapse">
+                                    <thead>
+                                      <tr className="border-b border-slate-900 text-[8px] font-mono uppercase text-slate-500 tracking-wider">
+                                        <th className="py-1 px-1.5 text-center">Inst</th>
+                                        <th className="py-1 px-1.5">Due Date</th>
+                                        <th className="py-1 px-1.5 text-right">Amount</th>
+                                        <th className="py-1 px-1.5 text-right">Principal + Int</th>
+                                        <th className="py-1 px-1.5 text-center">Status</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-900/40 font-mono text-[10px]">
+                                      {generateAmortizationSchedule(l).map((row) => (
+                                        <tr key={row.installmentNo} className="hover:bg-slate-900/20">
+                                          <td className="py-1.5 px-1.5 text-center text-slate-400">{row.installmentNo}</td>
+                                          <td className="py-1.5 px-1.5 text-slate-300 whitespace-nowrap">{row.dueDate}</td>
+                                          <td className="py-1.5 px-1.5 text-right font-semibold text-slate-200">
+                                            {Math.round(row.installmentAmount).toLocaleString()} {chama.currency}
+                                          </td>
+                                          <td className="py-1.5 px-1.5 text-right text-slate-500 text-[9px] whitespace-nowrap">
+                                            {Math.round(row.principalPortion).toLocaleString()} + {Math.round(row.interestPortion).toLocaleString()}
+                                          </td>
+                                          <td className="py-1.5 px-1.5 text-center">
+                                            <span className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase whitespace-nowrap ${
+                                              row.status === "paid"
+                                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                                : row.status === "partially_paid"
+                                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                                : "bg-slate-900 text-slate-500 border border-slate-800"
+                                            }`}>
+                                              {row.status === "paid" && "Paid"}
+                                              {row.status === "partially_paid" && `Partial`}
+                                              {row.status === "unpaid" && "Unpaid"}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -293,6 +514,11 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                     .filter((l) => l.status === "pending")
                     .map((l) => {
                       const totalPayable = l.amount * (1 + l.interestRate / 100);
+                      const applicantSavings = getMemberApprovedSavings(l.userId);
+                      const applicantShares = applicantSavings / (chama.sharePrice || 2000);
+                      const maxLimit = applicantSavings * 3;
+                      const withinLimit = l.amount <= maxLimit;
+
                       return (
                         <div key={l.id} className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-2.5 text-xs">
                           <div>
@@ -303,10 +529,23 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                             <p className="text-[9px] text-slate-500 font-mono uppercase pt-0.5">
                               Term: {l.repaymentTermMonths} mo • Rate: {l.interestRate}% ({totalPayable.toLocaleString()} {chama.currency} total due)
                             </p>
+                            
+                            <div className="mt-2.5 pt-2 border-t border-slate-900/60 space-y-1 text-[10px] font-mono">
+                              <div className="flex items-center justify-between text-slate-400">
+                                <span>Member Shares:</span>
+                                <span>{applicantShares.toFixed(1)} Units ({applicantSavings.toLocaleString()} {chama.currency})</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-450">3X Loan Limit:</span>
+                                <span className={`font-semibold ${withinLimit ? "text-emerald-400" : "text-red-400"}`}>
+                                  {maxLimit.toLocaleString()} {chama.currency} {withinLimit ? "✓ OK" : "⚠ OVER LIMIT"}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2 pt-1">
                             <button
-                              onClick={() => handleRejectLoan(l.id)}
+                              onClick={() => handleRejectLoan(l)}
                               className="flex-1 bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
                             >
                               <X className="w-3.5 h-3.5" /> REJECT
@@ -354,6 +593,33 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                   <span>{error}</span>
                 </div>
               )}
+
+              {/* Cooperative Loan Limit Rule Guide */}
+              {(() => {
+                const mySavings = getMemberApprovedSavings(currentUserId);
+                const myShares = mySavings / (chama.sharePrice || 2000);
+                const maxLoan = mySavings * 3;
+                return (
+                  <div className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-1 text-xs">
+                    <div className="flex justify-between items-center text-[10px] font-mono text-slate-500 uppercase tracking-wider">
+                      <span>Cooperative Rule Check</span>
+                      <span className="text-emerald-400 font-extrabold font-sans">3X Shares Limit</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1.5">
+                      <span className="text-slate-400">Your Owned Shares:</span>
+                      <span className="font-semibold text-emerald-400 font-mono">
+                        {myShares.toFixed(1)} Units ({mySavings.toLocaleString()} {chama.currency})
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Max Loan Eligibility:</span>
+                      <span className="font-bold text-slate-200 font-mono">
+                        {maxLoan.toLocaleString()} {chama.currency}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <form onSubmit={handleRequestLoan} className="space-y-4">
                 <div className="space-y-1.5">
