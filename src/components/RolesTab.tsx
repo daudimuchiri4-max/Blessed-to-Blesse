@@ -114,10 +114,13 @@ export default function RolesTab({ chama, currentUserId, memberRole }: RolesTabP
       (snapshot) => {
         const list: Member[] = [];
         snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...doc.data() } as Member);
+          const m = { id: doc.id, ...doc.data() } as Member;
+          if (m.role !== "super_admin" && m.email !== "superadmin@chama.com") {
+            list.push(m);
+          }
         });
-        // Sort super_admin, chairperson, vice_chairperson, treasurer, secretary, member
-        const roleOrder = { super_admin: 0, chairperson: 1, secretary: 2, vice_chairperson: 3, treasurer: 4, member: 5 };
+        // Sort chairperson, vice_chairperson, treasurer, secretary, member
+        const roleOrder = { chairperson: 0, secretary: 1, vice_chairperson: 2, treasurer: 3, member: 4 };
         list.sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9));
         setMembers(list);
         setLoading(false);

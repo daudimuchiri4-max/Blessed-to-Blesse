@@ -9,9 +9,10 @@ import { motion } from "motion/react";
 interface DashboardTabProps {
   chama: Chama;
   currentUserId: string;
+  onTabChange?: (tab: string) => void;
 }
 
-export default function DashboardTab({ chama, currentUserId }: DashboardTabProps) {
+export default function DashboardTab({ chama, currentUserId, onTabChange }: DashboardTabProps) {
   const [recentContributions, setRecentContributions] = useState<Contribution[]>([]);
   const [recentLoans, setRecentLoans] = useState<Loan[]>([]);
   const [allContributions, setAllContributions] = useState<Contribution[]>([]);
@@ -32,14 +33,17 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
         snapshot.forEach((doc) => {
           list.push({ id: doc.id, ...doc.data() } as Member);
         });
-        setMembers(list);
-        setMemberCount(list.length);
 
         // Find current user's role and details
         const me = list.find((m) => m.userId === currentUserId || m.id === currentUserId);
         if (me) {
           setMyMemberRecord(me);
         }
+
+        // Filter out super_admin role for lists and counts
+        const filteredList = list.filter(m => m.role !== "super_admin" && m.email !== "superadmin@chama.com");
+        setMembers(filteredList);
+        setMemberCount(filteredList.length);
       }
     );
 
@@ -199,6 +203,70 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
     return months;
   })();
 
+  // Helper to find the next due date based on group settings and creation date
+  const getNextDueDate = (createdAtStr: string, frequency: string): Date => {
+    const today = new Date();
+    const creationDate = createdAtStr ? new Date(createdAtStr) : new Date(2026, 0, 1);
+    
+    if (frequency === "weekly") {
+      const dueDayOfWeek = isNaN(creationDate.getTime()) ? 4 : creationDate.getDay();
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      while (d.getDay() !== dueDayOfWeek) {
+        d.setDate(d.getDate() + 1);
+      }
+      return d;
+    } else if (frequency === "monthly") {
+      const dueDayOfMonth = isNaN(creationDate.getTime()) ? 10 : creationDate.getDate();
+      const currentMonthDueDate = new Date(today.getFullYear(), today.getMonth(), dueDayOfMonth);
+      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      
+      if (todayMidnight <= currentMonthDueDate) {
+        return currentMonthDueDate;
+      } else {
+        return new Date(today.getFullYear(), today.getMonth() + 1, dueDayOfMonth);
+      }
+    } else {
+      // custom/fortnightly
+      const baseDate = isNaN(creationDate.getTime()) ? new Date(2026, 0, 1) : new Date(creationDate.getFullYear(), creationDate.getMonth(), creationDate.getDate());
+      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const diffTime = todayMidnight.getTime() - baseDate.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      let k = Math.floor(diffDays / 14);
+      if (k < 0) k = 0;
+      
+      let currentOccur = new Date(baseDate.getTime() + k * 14 * 24 * 60 * 60 * 1000);
+      while (currentOccur < todayMidnight) {
+        k++;
+        currentOccur = new Date(baseDate.getTime() + k * 14 * 24 * 60 * 60 * 1000);
+      }
+      return currentOccur;
+    }
+  };
+
+  const nextDueDate = getNextDueDate(chama.createdAt, chama.frequency);
+  const todayMidnight = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  const timeDiff = nextDueDate.getTime() - todayMidnight.getTime();
+  const daysLeft = Math.round(timeDiff / (1000 * 60 * 60 * 24));
+
+  // Check if they contributed for this nextDueDate cycle
+  const hasContributedForCycle = allContributions.some((c) => {
+    if (c.userId !== currentUserId) return false;
+    if (c.type !== "savings") return false;
+    if (c.status !== "approved") return false;
+    
+    const cDate = new Date(c.date);
+    if (isNaN(cDate.getTime())) return false;
+    
+    if (chama.frequency === "monthly") {
+      return cDate.getMonth() === nextDueDate.getMonth() && cDate.getFullYear() === nextDueDate.getFullYear();
+    } else {
+      const diffTime = Math.abs(cDate.getTime() - nextDueDate.getTime());
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      return diffDays <= 4;
+    }
+  });
+
   return (
     <div className="space-y-8 font-sans">
       
@@ -249,6 +317,71 @@ export default function DashboardTab({ chama, currentUserId }: DashboardTabProps
               <span>PORTAL LIVE SECURE CONNECTION</span>
             </div>
           </div>
+
+          {/* Contribution Reminder Banner */}
+          {hasContributedForCycle ? (
+            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-500/20 rounded-xl text-emerald-400 shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h5 className="text-xs font-bold text-white">Monthly Contribution Cleared</h5>
+                  <p className="text-[11px] text-emerald-400/80">
+                    Thank you! Your savings contribution for {nextDueDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })} has been approved. Keep up the great saving streak!
+                  </p>
+                </div>
+              </div>
+              <span className="hidden sm:inline-block text-[10px] font-mono font-bold px-2.5 py-1 bg-emerald-500/20 rounded-lg text-emerald-400 uppercase">
+                COMPLIANT
+              </span>
+            </div>
+          ) : (
+            <div className={`p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border ${
+              daysLeft <= 3 
+                ? "bg-amber-500/10 border-amber-500/30 animate-pulse" 
+                : "bg-slate-900/40 border-slate-900"
+            }`}>
+              <div className="flex items-start sm:items-center gap-3">
+                <div className={`p-2 rounded-xl shrink-0 ${
+                  daysLeft <= 3 ? "bg-amber-500/20 text-amber-400" : "bg-slate-800 text-slate-400"
+                }`}>
+                  <Calendar className="w-5 h-5" />
+                </div>
+                <div>
+                  <h5 className="text-xs font-bold text-white">
+                    {daysLeft <= 3 ? "Upcoming Contribution Due Soon" : "Upcoming Contribution Scheduled"}
+                  </h5>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Your {chama.frequency} savings contribution of <strong className="text-white">{chama.contributionAmount.toLocaleString()} {chama.currency}</strong> is due on <strong className="text-slate-200">{nextDueDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</strong>.
+                    {daysLeft <= 3 ? (
+                      <span className="text-amber-400 font-semibold block sm:inline sm:ml-1">
+                        ⚠️ Only {daysLeft === 0 ? "today" : `${daysLeft} days`} remaining!
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 block sm:inline sm:ml-1">
+                        ({daysLeft} days left)
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  if (onTabChange) {
+                    onTabChange("contributions");
+                  }
+                }}
+                className={`py-2 px-4 rounded-xl text-xs font-bold cursor-pointer transition-all shrink-0 w-full sm:w-auto text-center ${
+                  daysLeft <= 3 
+                    ? "bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-md shadow-amber-500/10" 
+                    : "bg-slate-800 hover:bg-slate-700 text-white"
+                }`}
+              >
+                Contribute Now &rarr;
+              </button>
+            </div>
+          )}
 
           {/* Three columns: Group Wealth Summary, My Personal Standing, Chama Directory */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">

@@ -115,7 +115,37 @@ export default function App() {
 
   // Auth subscriber
   useEffect(() => {
+    // Check for local storage bypass session on mount
+    const bypassUserStr = localStorage.getItem("chama_bypass_user");
+    if (bypassUserStr) {
+      try {
+        const parsed = JSON.parse(bypassUserStr);
+        setUser(parsed);
+        setAuthLoading(false);
+        
+        // Ensure their doc is created in Firestore under users/
+        const userRef = doc(db, "users", parsed.uid);
+        setDoc(
+          userRef,
+          {
+            id: parsed.uid,
+            name: parsed.displayName,
+            email: parsed.email,
+            photoURL: parsed.photoURL,
+            createdAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(err => console.error("Error setting bypass user doc:", err));
+      } catch (err) {
+        localStorage.removeItem("chama_bypass_user");
+      }
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (localStorage.getItem("chama_bypass_user")) {
+        // Ignore auth state changes if we are currently using a simulated admin bypass
+        return;
+      }
       if (currentUser) {
         setUser(currentUser);
         setAuthLoading(false);
@@ -233,7 +263,22 @@ export default function App() {
       memberDocRef,
       async (docSnap) => {
         if (docSnap.exists()) {
-          setMemberRecord(docSnap.data() as Member);
+          const data = docSnap.data() as Member;
+          if (user.email === "superadmin@chama.com" && data.role !== "super_admin") {
+            try {
+              await updateDoc(memberDocRef, { role: "super_admin", name: "Super Admin" });
+            } catch (err) {
+              console.error("Failed to upgrade super admin role automatically:", err);
+              // Fallback local setting to keep UX perfect
+              setMemberRecord({
+                ...data,
+                role: "super_admin",
+                name: "Super Admin"
+              });
+            }
+          } else {
+            setMemberRecord(data);
+          }
         } else {
           // Auto-join the user as a member if they aren't registered yet!
           // Check if they were pre-added by email manually
@@ -253,6 +298,7 @@ export default function App() {
                 userId: user.uid,
                 isPending: false, // successfully registered & authenticated!
                 photoURL: manualData.photoURL || user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(manualData.name || "Cooperator")}`,
+                role: user.email === "superadmin@chama.com" ? "super_admin" : manualData.role || "member",
               };
               
               // 1. Create the doc with user.uid as ID
@@ -264,12 +310,15 @@ export default function App() {
               }
             } else {
               // Create a brand new auto-joined member record
-              const name = user.displayName || user.email?.split("@")[0] || "Cooperator";
+              const name = user.email === "superadmin@chama.com" ? "Super Admin" : (user.displayName || user.email?.split("@")[0] || "Cooperator");
               const isCreator = selectedChama.createdBy === user.uid;
               
               // Determine role: Chairperson for the group creator, or if first member. Otherwise Member.
               const membersSnap = await getDocs(collection(db, "chamas", selectedChama.id, "members"));
-              const role = isCreator || membersSnap.empty ? "chairperson" : "member";
+              let role: Member["role"] = isCreator || membersSnap.empty ? "chairperson" : "member";
+              if (user.email === "superadmin@chama.com") {
+                role = "super_admin";
+              }
 
               const memberData: Member = {
                 id: user.uid,
@@ -378,17 +427,29 @@ export default function App() {
     }
   };
 
-  // Background check for pending payments past the 10th of the month
+  // Background check for upcoming payment reminders & overdue alerts
   useEffect(() => {
     if (!selectedChama || !user) return;
 
     const runBackgroundCheck = async () => {
       const today = new Date();
-      if (today.getDate() < 10) return; // Only past/on the 10th of the month
-
+      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      
       const currentYear = today.getFullYear();
-      const currentMonth = today.getMonth() + 1;
-      const currentMonthStr = `${currentYear}-${String(currentMonth).padStart(2, "0")}`;
+      const currentMonth = today.getMonth(); // 0-indexed
+      
+      // Calculate due date for the current month/period
+      const creationDate = selectedChama.createdAt ? new Date(selectedChama.createdAt) : new Date(2026, 0, 1);
+      const dueDayOfMonth = isNaN(creationDate.getTime()) ? 10 : creationDate.getDate();
+      
+      // Target due date for current month
+      const currentMonthDueDate = new Date(currentYear, currentMonth, dueDayOfMonth);
+      const currentMonthDueDateStr = currentMonthDueDate.toISOString().split("T")[0]; // YYYY-MM-DD
+      const currentMonthStr = `${currentYear}-${String(currentMonth + 1).padStart(2, "0")}`;
+
+      // Calculate diff in days
+      const diffTime = currentMonthDueDate.getTime() - todayMidnight.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
       try {
         // Fetch all members
@@ -407,6 +468,7 @@ export default function App() {
 
         for (const m of membersList) {
           if (m.isPending) continue; // Skip pending invitations
+          if (m.role === "super_admin" || m.email === "superadmin@chama.com") continue; // Skip super admin
 
           // Check if this member has an approved contribution of type "savings" this month
           const hasSavingsThisMonth = contributionsList.some((c) => {
@@ -417,29 +479,60 @@ export default function App() {
 
             const cDate = new Date(c.date);
             if (isNaN(cDate.getTime())) return false;
-            const cMonthStr = `${cDate.getFullYear()}-${String(cDate.getMonth() + 1).padStart(2, "0")}`;
-            return cMonthStr === currentMonthStr;
+            
+            if (selectedChama.frequency === "monthly") {
+              return cDate.getMonth() === currentMonthDueDate.getMonth() && cDate.getFullYear() === currentMonthDueDate.getFullYear();
+            } else {
+              // weekly/custom, match within 4 days of the due date
+              const timeDiff = Math.abs(cDate.getTime() - currentMonthDueDate.getTime());
+              const dayDiff = timeDiff / (1000 * 60 * 60 * 24);
+              return dayDiff <= 4;
+            }
           });
 
           if (!hasSavingsThisMonth) {
-            // Check if we already sent a 'Payment Pending' notification to this user this month
-            const alreadyNotified = m.lastNotifiedMonth === currentMonthStr;
+            // 1. UPCOMING REMINDER: Exactly 3 days before (diffDays === 3)
+            if (diffDays === 3) {
+              const lastRemindedDueDate = (m as any).lastRemindedDueDate;
+              if (lastRemindedDueDate !== currentMonthDueDateStr) {
+                const readableDueDate = currentMonthDueDate.toLocaleDateString("en-US", { month: "long", day: "numeric" });
+                await createChamaNotification(selectedChama.id, {
+                  title: "Upcoming Contribution Reminder",
+                  message: `Hi ${m.name}, your monthly savings contribution of ${selectedChama.contributionAmount.toLocaleString()} ${selectedChama.currency} is due in 3 days (on ${readableDueDate}). Please make sure to submit your contribution in time.`,
+                  type: "info",
+                  userId: m.userId || m.id,
+                  link: "contributions",
+                });
 
-            if (!alreadyNotified) {
-              const monthName = today.toLocaleDateString("en-US", { month: "long" });
-              await createChamaNotification(selectedChama.id, {
-                title: "Payment Pending",
-                message: `Hi ${m.name}, your monthly savings contribution of ${selectedChama.contributionAmount.toLocaleString()} ${selectedChama.currency} for ${monthName} was due on the 10th. Please complete your payment.`,
-                type: "warning",
-                userId: m.userId || m.id,
-                link: "contributions",
-              });
+                // Persist reminder sent state
+                const memberDocRef = doc(db, "chamas", selectedChama.id, "members", m.id);
+                await updateDoc(memberDocRef, {
+                  lastRemindedDueDate: currentMonthDueDateStr,
+                });
+              }
+            }
 
-              // Persist the last notified month on the member's document
-              const memberDocRef = doc(db, "chamas", selectedChama.id, "members", m.id);
-              await updateDoc(memberDocRef, {
-                lastNotifiedMonth: currentMonthStr,
-              });
+            // 2. OVERDUE NOTIFICATION: Past/on the due date (diffDays <= 0)
+            if (diffDays <= 0) {
+              const alreadyNotified = m.lastNotifiedMonth === currentMonthStr;
+
+              if (!alreadyNotified) {
+                const monthName = today.toLocaleDateString("en-US", { month: "long" });
+                const readableDueDate = currentMonthDueDate.toLocaleDateString("en-US", { month: "long", day: "numeric" });
+                await createChamaNotification(selectedChama.id, {
+                  title: "Payment Overdue",
+                  message: `Hi ${m.name}, your monthly savings contribution of ${selectedChama.contributionAmount.toLocaleString()} ${selectedChama.currency} for ${monthName} was due on ${readableDueDate}. Please complete your payment.`,
+                  type: "warning",
+                  userId: m.userId || m.id,
+                  link: "contributions",
+                });
+
+                // Persist overdue notification sent state
+                const memberDocRef = doc(db, "chamas", selectedChama.id, "members", m.id);
+                await updateDoc(memberDocRef, {
+                  lastNotifiedMonth: currentMonthStr,
+                });
+              }
             }
           }
         }
@@ -452,6 +545,7 @@ export default function App() {
   }, [selectedChama?.id, user?.uid]);
 
   const handleLogout = async () => {
+    localStorage.removeItem("chama_bypass_user");
     setUser(null);
     setSelectedChama(null);
     await signOut(auth);
@@ -551,7 +645,11 @@ export default function App() {
   }
 
   if (!user) {
-    return <LandingPage onLoginSuccess={() => {}} />;
+    return <LandingPage onLoginSuccess={(simulatedUser) => {
+      if (simulatedUser) {
+        setUser(simulatedUser);
+      }
+    }} />;
   }
 
   if (!selectedChama) {
@@ -575,7 +673,7 @@ export default function App() {
       <div className="absolute inset-0 bg-[radial-gradient(#10b981_1px,transparent_1px)] [background-size:24px_24px] opacity-[0.02] pointer-events-none" />
 
       {/* Workspace Header */}
-      <header className="relative z-10 w-full max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-center justify-between border-b border-slate-900 gap-4">
+      <header className="relative z-30 w-full max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-center justify-between border-b border-slate-900 gap-4">
         
         {/* Left Side: Logo & Group Name with Edit Option */}
         <div className="flex items-center gap-4 self-start md:self-auto min-w-0">
@@ -820,7 +918,7 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               {activeTab === "dashboard" && (
-                <DashboardTab chama={selectedChama} currentUserId={user.uid} />
+                <DashboardTab chama={selectedChama} currentUserId={user.uid} onTabChange={setActiveTab} />
               )}
               {activeTab === "contributions" && (
                 <ContributionsTab
