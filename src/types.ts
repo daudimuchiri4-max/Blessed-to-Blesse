@@ -82,6 +82,8 @@ export interface Loan {
   dateRequested: string;
   dueDate: string;
   approvedBy?: string;
+  guarantors?: string[];
+  agreedToDeduction?: boolean;
 }
 
 export interface ChamaNotification {
