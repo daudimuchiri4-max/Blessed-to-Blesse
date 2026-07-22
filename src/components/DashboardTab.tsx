@@ -535,7 +535,10 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
                 {/* Directory list scroll */}
                 <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-thin">
                   {members
-                    .filter((m) => m.name.toLowerCase().includes(searchMemberQuery.toLowerCase()) || m.email.toLowerCase().includes(searchMemberQuery.toLowerCase()))
+                    .filter((m) => 
+                      (m.name || "").toLowerCase().includes((searchMemberQuery || "").toLowerCase()) || 
+                      (m.email || "").toLowerCase().includes((searchMemberQuery || "").toLowerCase())
+                    )
                     .map((m) => {
                       const memberSavings = allContributions
                         .filter((c) => (c.userId === m.userId || c.userId === m.id) && c.type === "savings" && c.status === "approved")

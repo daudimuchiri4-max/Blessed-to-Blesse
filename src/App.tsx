@@ -28,7 +28,8 @@ import {
   Copy,
   Check,
   Bell,
-  BellOff
+  BellOff,
+  Wifi
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -91,6 +92,10 @@ export default function App() {
   const [notifications, setNotifications] = useState<ChamaNotification[]>([]);
   const [showNotificationsDropdown, setShowNotificationsDropdown] = useState(false);
   const notificationsDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Members & Presence State
+  const [allMembersList, setAllMembersList] = useState<Member[]>([]);
+  const [showOnlineMembersModal, setShowOnlineMembersModal] = useState(false);
 
   // Modal states
   const [showGroupSettings, setShowGroupSettings] = useState(false);
@@ -345,6 +350,55 @@ export default function App() {
 
     return () => unsubscribeMember();
   }, [selectedChama?.id, user?.uid, user?.email]);
+
+  // Online presence heartbeat: periodically update lastSeen for current member
+  useEffect(() => {
+    if (!selectedChama?.id || !user?.uid) return;
+
+    const updatePresence = async () => {
+      try {
+        const memberRef = doc(db, "chamas", selectedChama.id, "members", user.uid);
+        await setDoc(memberRef, {
+          lastSeen: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.error("Presence update failed:", err);
+      }
+    };
+
+    updatePresence();
+    const interval = setInterval(updatePresence, 15000); // Heartbeat every 15 seconds
+
+    return () => clearInterval(interval);
+  }, [selectedChama?.id, user?.uid]);
+
+  // Subscribe to all members list for global presence monitoring
+  useEffect(() => {
+    if (!selectedChama?.id) {
+      setAllMembersList([]);
+      return;
+    }
+
+    const membersColl = collection(db, "chamas", selectedChama.id, "members");
+    const unsubscribe = onSnapshot(
+      membersColl,
+      (snapshot) => {
+        const list: Member[] = [];
+        snapshot.forEach((docSnap) => {
+          const m = { id: docSnap.id, ...docSnap.data() } as Member;
+          if (!m.isPending && m.email !== "superadmin@chama.com") {
+            list.push(m);
+          }
+        });
+        setAllMembersList(list);
+      },
+      (err) => {
+        console.error("Error fetching members list in App:", err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [selectedChama?.id]);
 
   // Real-time subscribe to notifications in selected Chama
   useEffect(() => {
@@ -668,6 +722,12 @@ export default function App() {
   const isLeader = currentRole === "super_admin" || currentRole === "chairperson" || currentRole === "vice_chairperson" || currentRole === "treasurer" || currentRole === "secretary" || selectedChama.createdBy === user?.uid;
   const isAdmin = currentRole === "super_admin" || currentRole === "chairperson" || selectedChama.createdBy === user?.uid;
 
+  const activeOnlineMembers = allMembersList.filter((m) => {
+    if (!m.lastSeen) return false;
+    const diffMs = Date.now() - new Date(m.lastSeen).getTime();
+    return diffMs < 2 * 60 * 1000; // active in last 2 minutes
+  });
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950">
       <div className="absolute inset-0 bg-[radial-gradient(#10b981_1px,transparent_1px)] [background-size:24px_24px] opacity-[0.02] pointer-events-none" />
@@ -709,11 +769,23 @@ export default function App() {
         </div>
 
         {/* Right Side: Account info with Edit Profile Option */}
-        <div className="flex items-center gap-4 justify-between w-full md:w-auto self-end md:self-auto border-t border-slate-900/60 pt-3 md:pt-0 md:border-t-0">
+        <div className="flex items-center gap-3 justify-between w-full md:w-auto self-end md:self-auto border-t border-slate-900/60 pt-3 md:pt-0 md:border-t-0">
           
+          {/* Live Online Badge Button */}
+          <button
+            onClick={() => setShowOnlineMembersModal(true)}
+            className="flex items-center gap-2 bg-emerald-950/80 border border-emerald-500/40 px-3 py-1.5 rounded-xl hover:bg-emerald-900/60 hover:border-emerald-400 transition-all cursor-pointer text-emerald-400 shrink-0 shadow-sm shadow-emerald-950"
+            title="Click to view live online cooperators"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[10px] font-mono font-extrabold uppercase">
+              {activeOnlineMembers.length} {activeOnlineMembers.length === 1 ? "ONLINE" : "ONLINE"}
+            </span>
+          </button>
+
           {/* Role badge */}
           <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
             <span className="text-[10px] font-mono font-bold text-slate-400 uppercase">
               {currentRole}
             </span>
@@ -1260,6 +1332,126 @@ export default function App() {
                   className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer transition-colors"
                 >
                   Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Online Members Presence Modal */}
+      <AnimatePresence>
+        {showOnlineMembersModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl space-y-4 p-6 relative"
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400">
+                    <Wifi className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+                      Cooperator Live Presence
+                    </h3>
+                    <p className="text-[10px] text-slate-400">Real-time active group members</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowOnlineMembersModal(false)}
+                  className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Stats overview */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-slate-950 border border-slate-850 rounded-xl text-center space-y-0.5">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase block">Active Right Now</span>
+                  <span className="text-lg font-bold text-emerald-400 font-mono flex items-center justify-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    {activeOnlineMembers.length}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-950 border border-slate-850 rounded-xl text-center space-y-0.5">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase block">Total Group Size</span>
+                  <span className="text-lg font-bold text-slate-200 font-mono">
+                    {allMembersList.length}
+                  </span>
+                </div>
+              </div>
+
+              {/* Members List */}
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                <h4 className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Member Presence Roster</h4>
+                {allMembersList.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">No registered members found.</p>
+                ) : (
+                  allMembersList.map((m) => {
+                    const isOnline = m.lastSeen && (Date.now() - new Date(m.lastSeen).getTime() < 120000);
+                    const diffMins = m.lastSeen ? Math.round((Date.now() - new Date(m.lastSeen).getTime()) / 60000) : null;
+
+                    return (
+                      <div
+                        key={m.id}
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+                          isOnline ? "bg-emerald-950/20 border-emerald-500/30" : "bg-slate-950/50 border-slate-850"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="relative shrink-0">
+                            <img
+                              src={m.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                              alt={m.name}
+                              referrerPolicy="no-referrer"
+                              className="w-8 h-8 rounded-full border border-slate-800 bg-slate-900"
+                            />
+                            <span
+                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${
+                                isOnline ? "bg-emerald-400 animate-pulse" : "bg-slate-600"
+                              }`}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-slate-200 truncate">{m.name}</span>
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 uppercase">
+                                {m.role}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-mono block truncate">{m.email}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          {isOnline ? (
+                            <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                              ONLINE NOW
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono text-slate-500">
+                              {diffMins !== null ? `${diffMins}m ago` : "Offline"}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="pt-2 border-t border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowOnlineMembersModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl cursor-pointer transition-colors"
+                >
+                  Close Audit
                 </button>
               </div>
             </motion.div>

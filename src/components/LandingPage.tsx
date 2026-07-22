@@ -230,7 +230,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
         } catch (err: any) {
           if (err.code === "auth/operation-not-allowed") {
             console.warn("Email/Password Sign-In is disabled. Falling back to simulated login.");
-            const isSuperAdmin = email.toLowerCase() === "superadmin@chama.com";
+            const isSuperAdmin = (email || "").toLowerCase() === "superadmin@chama.com";
             const displayName = isSuperAdmin ? "Super Admin" : (email.split("@")[0] || "Cooperator");
             const bypassUser = {
               uid: isSuperAdmin ? "superadmin_bypass_uid" : `bypass_${email.replace(/[^a-zA-Z0-9]/g, "_")}`,

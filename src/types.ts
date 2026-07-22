@@ -42,6 +42,7 @@ export interface Member {
   phoneNumber?: string;
   permissions?: MemberPermissions;
   lastNotifiedMonth?: string;
+  lastSeen?: string;
 }
 
 export interface Contribution {
@@ -84,6 +85,8 @@ export interface Loan {
   approvedBy?: string;
   guarantors?: string[];
   agreedToDeduction?: boolean;
+  approvedByChair?: string;
+  approvedByTreasurer?: string;
 }
 
 export interface ChamaNotification {

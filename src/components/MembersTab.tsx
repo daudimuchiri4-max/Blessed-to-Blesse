@@ -21,7 +21,10 @@ import {
   BookOpen, 
   Info,
   Edit2,
-  Trash2
+  Trash2,
+  Activity,
+  Wifi,
+  Clock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -56,6 +59,29 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
   const isAdmin = memberRole === "super_admin" || memberRole === "chairperson" || chama.createdBy === currentUserId;
   const isSecretary = memberRole === "secretary";
   const isOfficer = isAdmin || isSecretary || memberRole === "treasurer" || memberRole === "vice_chairperson";
+
+  const getOnlineStatus = (lastSeen?: string) => {
+    if (!lastSeen) return { isOnline: false, status: "offline", label: "Offline", color: "slate" };
+    const diffMs = Date.now() - new Date(lastSeen).getTime();
+    if (diffMs < 2 * 60 * 1000) { // 2 minutes
+      return { isOnline: true, status: "online", label: "Online now", color: "emerald" };
+    } else if (diffMs < 30 * 60 * 1000) { // 30 minutes
+      const mins = Math.max(1, Math.round(diffMs / 60000));
+      return { isOnline: false, status: "away", label: `Active ${mins}m ago`, color: "amber" };
+    } else {
+      const d = new Date(lastSeen);
+      const isToday = d.toDateString() === new Date().toDateString();
+      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return { 
+        isOnline: false, 
+        status: "offline", 
+        label: isToday ? `Last seen ${timeStr}` : `Last seen ${d.toLocaleDateString()}`, 
+        color: "slate" 
+      };
+    }
+  };
+
+  const onlineMembers = members.filter(m => getOnlineStatus(m.lastSeen).isOnline);
 
   const handleOpenEdit = (m: Member) => {
     setEditingMember(m);
@@ -156,7 +182,7 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
     const emailClean = newMemberEmail.trim().toLowerCase();
 
     // Check if duplicate email in current state list
-    const isDuplicate = members.some((m) => m.email.toLowerCase() === emailClean);
+    const isDuplicate = members.some((m) => (m.email || "").toLowerCase() === emailClean);
     if (isDuplicate) {
       setError("This email address is already registered as a member of this Chama.");
       return;
@@ -338,12 +364,36 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
 
       {/* Members Directory Card */}
       <div className="p-6 bg-slate-900/40 border border-slate-900 rounded-2xl space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-900 pb-3">
-          <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
-            Registered Cooperators ({members.length})
-          </h4>
-          <span className="text-[10px] font-mono text-slate-500">Live directory</span>
+        <div className="flex flex-wrap items-center justify-between border-b border-slate-900 pb-3 gap-2">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-bold text-white font-mono uppercase tracking-wider">
+              Registered Cooperators ({members.length})
+            </h4>
+            <span className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              {onlineMembers.length} {onlineMembers.length === 1 ? "Member" : "Members"} Online
+            </span>
+          </div>
+          <span className="text-[10px] font-mono text-slate-500">Real-time presence</span>
         </div>
+
+        {/* Quick Online Members Ribbon */}
+        {onlineMembers.length > 0 && (
+          <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 rounded-xl flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Wifi className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
+              <div className="text-[11px] truncate">
+                <span className="text-emerald-300 font-semibold">Active Right Now: </span>
+                <span className="text-slate-300 font-mono">
+                  {onlineMembers.map(m => m.name).join(", ")}
+                </span>
+              </div>
+            </div>
+            <span className="text-[9px] font-mono text-emerald-400 shrink-0 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              LIVE
+            </span>
+          </div>
+        )}
 
         {loading ? (
           <div className="space-y-3 py-6">
@@ -353,19 +403,35 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {members.map((m) => (
+            {members.map((m) => {
+              const presence = getOnlineStatus(m.lastSeen);
+
+              return (
               <div 
                 key={m.id} 
-                className="p-4 bg-slate-950/40 border border-slate-900 rounded-xl flex flex-col justify-between gap-4 hover:border-slate-800 transition-all text-xs relative group"
+                className={`p-4 bg-slate-950/40 border rounded-xl flex flex-col justify-between gap-4 transition-all text-xs relative group ${
+                  presence.isOnline ? "border-emerald-500/30 shadow-sm shadow-emerald-950/50" : "border-slate-900 hover:border-slate-800"
+                }`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={m.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
-                      alt={m.name}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full border border-slate-800 bg-slate-900 shrink-0"
-                    />
+                    <div className="relative shrink-0">
+                      <img
+                        src={m.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                        alt={m.name}
+                        referrerPolicy="no-referrer"
+                        className="w-10 h-10 rounded-full border border-slate-800 bg-slate-900 shrink-0"
+                      />
+                      {/* Presence Dot Indicator */}
+                      <span 
+                        className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-slate-950 ${
+                          presence.status === "online" ? "bg-emerald-400 ring-2 ring-emerald-500/30 animate-pulse" :
+                          presence.status === "away" ? "bg-amber-400" : "bg-slate-600"
+                        }`}
+                        title={presence.label}
+                      />
+                    </div>
+
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <h5 className="font-bold text-slate-200 text-sm truncate max-w-[110px]">{m.name}</h5>
@@ -380,7 +446,20 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
                           </span>
                         )}
                       </div>
-                      <p className="text-[10px] text-slate-500 font-mono truncate">{m.email}</p>
+
+                      {/* Presence Status Pill */}
+                      <div className="flex items-center gap-1 text-[10px] font-mono mt-0.5">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                          presence.status === "online" ? "bg-emerald-400" :
+                          presence.status === "away" ? "bg-amber-400" : "bg-slate-500"
+                        }`} />
+                        <span className={`${
+                          presence.status === "online" ? "text-emerald-400 font-semibold" :
+                          presence.status === "away" ? "text-amber-400" : "text-slate-500"
+                        }`}>
+                          {presence.label}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
@@ -470,7 +549,8 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

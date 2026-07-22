@@ -52,6 +52,9 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
   const [recovering, setRecovering] = useState(false);
 
   const isAdmin = memberRole === "super_admin" || memberRole === "chairperson" || chama.createdBy === currentUserId;
+  const isAuthorizedOfficial = isAdmin || memberRole === "treasurer";
+  const isChairperson = memberRole === "chairperson" || memberRole === "super_admin" || chama.createdBy === currentUserId;
+  const isTreasurer = memberRole === "treasurer" || memberRole === "super_admin" || chama.createdBy === currentUserId;
 
   // Helper: get total approved savings contributions of a member
   const getMemberApprovedSavings = (userId: string) => {
@@ -165,8 +168,8 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
         const list: Member[] = [];
         snapshot.forEach((doc) => {
           const m = { id: doc.id, ...doc.data() } as Member;
-          // Filter out super_admin and pending members
-          if (!m.isPending && m.role !== "super_admin" && m.email !== "superadmin@chama.com") {
+          // Filter out pending members and the main system admin email
+          if (!m.isPending && m.email !== "superadmin@chama.com") {
             list.push(m);
           }
         });
@@ -203,8 +206,42 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
       return;
     }
 
-    if (guarantor1 === currentUserId || guarantor2 === currentUserId || guarantor3 === currentUserId) {
+    const selectedG1 = members.find(m => m.id === guarantor1 || m.userId === guarantor1);
+    const selectedG2 = members.find(m => m.id === guarantor2 || m.userId === guarantor2);
+    const selectedG3 = members.find(m => m.id === guarantor3 || m.userId === guarantor3);
+
+    if (!selectedG1 || !selectedG2 || !selectedG3) {
+      setError("Please select exactly 3 valid group members to sign as co-signers/guarantors.");
+      return;
+    }
+
+    if (
+      selectedG1.id === currentUserId || selectedG1.userId === currentUserId ||
+      selectedG2.id === currentUserId || selectedG2.userId === currentUserId ||
+      selectedG3.id === currentUserId || selectedG3.userId === currentUserId
+    ) {
       setError("You cannot select yourself as a co-signer/guarantor.");
+      return;
+    }
+
+    // Verify co-signer shares/savings eligibility (must cover 1/3 of the requested loan)
+    const requiredGuaranteePerCoSigner = principal / 3;
+    const g1Savings = Math.max(getMemberApprovedSavings(selectedG1.userId), getMemberApprovedSavings(selectedG1.id));
+    const g2Savings = Math.max(getMemberApprovedSavings(selectedG2.userId), getMemberApprovedSavings(selectedG2.id));
+    const g3Savings = Math.max(getMemberApprovedSavings(selectedG3.userId), getMemberApprovedSavings(selectedG3.id));
+
+    if (g1Savings < requiredGuaranteePerCoSigner) {
+      setError(`Co-signer "${selectedG1.name}" has insufficient shares. They have ${g1Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      return;
+    }
+
+    if (g2Savings < requiredGuaranteePerCoSigner) {
+      setError(`Co-signer "${selectedG2.name}" has insufficient shares. They have ${g2Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      return;
+    }
+
+    if (g3Savings < requiredGuaranteePerCoSigner) {
+      setError(`Co-signer "${selectedG3.name}" has insufficient shares. They have ${g3Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
       return;
     }
 
@@ -234,10 +271,6 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
       // Calculate due date (term in months from now)
       const dueDateObj = new Date();
       dueDateObj.setMonth(dueDateObj.getMonth() + term);
-
-      const selectedG1 = members.find(m => m.id === guarantor1 || m.userId === guarantor1);
-      const selectedG2 = members.find(m => m.id === guarantor2 || m.userId === guarantor2);
-      const selectedG3 = members.find(m => m.id === guarantor3 || m.userId === guarantor3);
 
       const loanData: Omit<Loan, "id"> = {
         userId: currentUserId,
@@ -316,6 +349,65 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
       });
     } catch (err) {
       console.error("Error approving loan:", err);
+    }
+  };
+
+  const handleApproveRole = async (loan: Loan, roleType: "chair" | "treasurer") => {
+    try {
+      const updates: Partial<Loan> = {};
+      if (roleType === "chair") {
+        updates.approvedByChair = currentUserDisplayName || "Chairperson";
+      } else {
+        updates.approvedByTreasurer = currentUserDisplayName || "Treasurer";
+      }
+
+      // Check if this approval will complete both requirements
+      const willBeFullyApproved = 
+        (roleType === "chair" ? !!updates.approvedByChair : !!loan.approvedByChair) &&
+        (roleType === "treasurer" ? !!updates.approvedByTreasurer : !!loan.approvedByTreasurer);
+
+      if (willBeFullyApproved) {
+        updates.status = "active";
+        updates.approvedBy = currentUserId; // general fallback
+      }
+
+      await updateDoc(doc(db, "chamas", chama.id, "loans", loan.id), updates);
+
+      if (willBeFullyApproved) {
+        // Increment Chama outstanding loans total
+        await updateDoc(doc(db, "chamas", chama.id), {
+          totalLoans: increment(loan.amount),
+          // Draw loan amount from savings pool
+          totalSavings: increment(-loan.amount),
+        });
+
+        // Send a targeted notification to the borrower
+        await createChamaNotification(chama.id, {
+          title: "Loan Approved",
+          message: `Your loan of ${loan.amount.toLocaleString()} ${chama.currency} has been approved by the Chairperson and Treasurer, and has been disbursed.`,
+          type: "success",
+          userId: loan.userId,
+          link: "loans",
+        });
+
+        // Send a general notification to all members about credit disbursement
+        await createChamaNotification(chama.id, {
+          title: "Loan Disbursed",
+          message: `Cooperative loan of ${loan.amount.toLocaleString()} ${chama.currency} has been approved by Chairperson and Treasurer and disbursed to ${loan.memberName}.`,
+          type: "info",
+          link: "loans",
+        });
+      } else {
+        // Notification for single-stage approval
+        await createChamaNotification(chama.id, {
+          title: "Loan Sign-off Added",
+          message: `${currentUserDisplayName} signed off on the loan request for ${loan.memberName} as ${roleType === "chair" ? "Chairperson" : "Treasurer"}. Awaiting other official approval.`,
+          type: "warning",
+          link: "loans",
+        });
+      }
+    } catch (err) {
+      console.error("Error signing off loan:", err);
     }
   };
 
@@ -538,7 +630,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                       </div>
                     )}
 
-                    {l.status === "active" && isAdmin && (
+                    {l.status === "active" && isAuthorizedOfficial && (
                       <div className="pt-1 flex items-center justify-end">
                         <button
                           type="button"
@@ -645,20 +737,20 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
               Credit Approvals
             </h4>
             <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase">
-              {isAdmin ? "ADMIN ACCESS" : "VIEW ONLY"}
+              {isAuthorizedOfficial ? "OFFICIAL ACCESS" : "VIEW ONLY"}
             </span>
           </div>
 
-          {!isAdmin ? (
+          {!isAuthorizedOfficial ? (
             <div className="p-4 bg-slate-950/20 border border-slate-900 rounded-xl space-y-2 text-xs text-slate-500 text-center">
               <AlertCircle className="w-6 h-6 mx-auto text-slate-700" />
               <p className="font-mono text-[10px]">APPROVALS RESTRICTED</p>
-              <p>Only the group administrators can authorize member loan releases.</p>
+              <p>Only the Chairperson, Treasurer, and designated administrators can authorize member loan releases.</p>
             </div>
           ) : (
             <div className="space-y-4">
               <p className="text-[11px] text-slate-400">
-                Member loan applications pending release. Releasing loans deducts principal capital from the Savings Pool.
+                Cooperative loans require multi-stage dual approval (both Chairperson and Treasurer) before principal capital is released from the savings pool.
               </p>
 
               <div className="space-y-3">
@@ -693,11 +785,38 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                               <div className="mt-2 text-[9px] text-slate-400 bg-slate-900/40 p-2 rounded-lg border border-slate-850 flex items-start gap-1.5">
                                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
                                 <div>
-                                  <span className="font-semibold text-slate-300">Co-signers:</span>{" "}
-                                  <span>{l.guarantors.join(", ")}</span>
+                                  <span className="font-semibold text-slate-300">Co-signers (each guarantees {(l.amount / 3).toLocaleString()} {chama.currency}):</span>{" "}
+                                  <span className="text-slate-400">{l.guarantors.join(", ")}</span>
                                 </div>
                               </div>
                             )}
+
+                            {/* Dual Approvals Signatures Status */}
+                            <div className="mt-2.5 pt-2 border-t border-slate-900/60 space-y-2 text-[10px]">
+                              <p className="font-semibold text-slate-300 uppercase tracking-wider text-[9px] font-mono">Sign-off Status:</p>
+                              
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">1. Chairperson Sign-off:</span>
+                                {l.approvedByChair ? (
+                                  <span className="text-emerald-400 font-medium font-mono flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[9px]">
+                                    <Check className="w-3 h-3 stroke-[3]" /> {l.approvedByChair}
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-500 font-medium font-mono bg-amber-500/10 px-1.5 py-0.5 rounded text-[9px]">Awaiting Sign-off</span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">2. Treasurer Sign-off:</span>
+                                {l.approvedByTreasurer ? (
+                                  <span className="text-emerald-400 font-medium font-mono flex items-center gap-1 bg-emerald-500/10 px-1.5 py-0.5 rounded text-[9px]">
+                                    <Check className="w-3 h-3 stroke-[3]" /> {l.approvedByTreasurer}
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-500 font-medium font-mono bg-amber-500/10 px-1.5 py-0.5 rounded text-[9px]">Awaiting Sign-off</span>
+                                )}
+                              </div>
+                            </div>
 
                             <div className="mt-2.5 pt-2 border-t border-slate-900/60 space-y-1 text-[10px] font-mono">
                               <div className="flex items-center justify-between text-slate-400">
@@ -712,18 +831,35 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 pt-1">
+
+                          <div className="flex flex-col gap-2 pt-1 border-t border-slate-900/60">
+                            {/* Approve Actions */}
+                            <div className="flex gap-2">
+                              {isChairperson && !l.approvedByChair && (
+                                <button
+                                  onClick={() => handleApproveRole(l, "chair")}
+                                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-2 py-1.5 rounded-lg font-bold font-mono text-[9px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <Check className="w-3 h-3 stroke-[3]" /> SIGN CHAIR
+                                </button>
+                              )}
+
+                              {isTreasurer && !l.approvedByTreasurer && (
+                                <button
+                                  onClick={() => handleApproveRole(l, "treasurer")}
+                                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-slate-950 px-2 py-1.5 rounded-lg font-bold font-mono text-[9px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <Check className="w-3 h-3 stroke-[3]" /> SIGN TREASURER
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Decline Action */}
                             <button
                               onClick={() => handleRejectLoan(l)}
-                              className="flex-1 bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                              className="w-full bg-red-500/10 hover:bg-red-500 hover:text-slate-950 border border-red-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
                             >
-                              <X className="w-3.5 h-3.5" /> REJECT
-                            </button>
-                            <button
-                              onClick={() => handleApproveLoan(l)}
-                              className="flex-1 bg-emerald-500/10 hover:bg-emerald-500 hover:text-slate-950 border border-emerald-500/20 px-2 py-1.5 rounded-lg font-semibold font-mono text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer"
-                            >
-                              <Check className="w-3.5 h-3.5 stroke-[3]" /> RELEASE
+                              <X className="w-3.5 h-3.5" /> REJECT APPLICATION
                             </button>
                           </div>
                         </div>
@@ -870,20 +1006,63 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
 
                   {/* 3 Select dropdowns for Co-signers */}
                   <div className="space-y-2">
+                    {parseFloat(amount) > 0 && (
+                      <div className="p-2 bg-slate-900/60 border border-slate-850 rounded-lg text-[10px] text-slate-400">
+                        <span className="font-semibold text-slate-300">Minimum shares required per co-signer: </span>
+                        <span className="text-amber-400 font-mono font-bold">
+                          {(parseFloat(amount) / 3).toLocaleString()} {chama.currency}
+                        </span>{" "}
+                        ({((parseFloat(amount) / 3) / (chama.sharePrice || 2000)).toFixed(1)} Units)
+                      </div>
+                    )}
+
+                    {/* Live Online Co-signers Helper Banner */}
+                    {(() => {
+                      const onlineOthers = members.filter(m => m.id !== currentUserId && m.userId !== currentUserId && m.lastSeen && (Date.now() - new Date(m.lastSeen).getTime() < 120000));
+                      return (
+                        <div className="p-2.5 bg-emerald-950/60 border border-emerald-500/30 rounded-lg space-y-1">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-[11px]">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Active Online Members Available Right Now ({onlineOthers.length}):</span>
+                          </div>
+                          <p className="text-[10px] text-slate-300 font-mono">
+                            {onlineOthers.length > 0
+                              ? onlineOthers.map(m => `${m.name} (${m.role})`).join(", ")
+                              : "No other members online right now. You can still select registered group members to guarantee your request."}
+                          </p>
+                        </div>
+                      );
+                    })()}
+
                     <div className="space-y-1">
                       <label className="text-[10px] text-slate-500 font-mono uppercase">Guarantor / Co-signer 1</label>
                       <select
                         required
                         value={guarantor1}
                         onChange={(e) => setGuarantor1(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
                       >
                         <option value="">-- Select Co-signer 1 --</option>
                         {members
-                          .filter(m => m.id !== currentUserId && m.id !== guarantor2 && m.id !== guarantor3)
-                          .map(m => (
-                            <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
-                          ))}
+                          .filter(m => m.id !== currentUserId && m.userId !== currentUserId && m.id !== guarantor2 && m.id !== guarantor3)
+                          .sort((a, b) => {
+                            const aOnline = a.lastSeen && (Date.now() - new Date(a.lastSeen).getTime() < 120000) ? 1 : 0;
+                            const bOnline = b.lastSeen && (Date.now() - new Date(b.lastSeen).getTime() < 120000) ? 1 : 0;
+                            return bOnline - aOnline;
+                          })
+                          .map(m => {
+                            const savings = Math.max(getMemberApprovedSavings(m.userId), getMemberApprovedSavings(m.id));
+                            const sharesCount = savings / (chama.sharePrice || 2000);
+                            const required = (parseFloat(amount) || 0) / 3;
+                            const hasEnough = !required || savings >= required;
+                            const isOnline = m.lastSeen && (Date.now() - new Date(m.lastSeen).getTime() < 120000);
+
+                            return (
+                              <option key={m.id} value={m.id} disabled={!hasEnough}>
+                                {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                              </option>
+                            );
+                          })}
                       </select>
                     </div>
 
@@ -893,14 +1072,29 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                         required
                         value={guarantor2}
                         onChange={(e) => setGuarantor2(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
                       >
                         <option value="">-- Select Co-signer 2 --</option>
                         {members
-                          .filter(m => m.id !== currentUserId && m.id !== guarantor1 && m.id !== guarantor3)
-                          .map(m => (
-                            <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
-                          ))}
+                          .filter(m => m.id !== currentUserId && m.userId !== currentUserId && m.id !== guarantor1 && m.id !== guarantor3)
+                          .sort((a, b) => {
+                            const aOnline = a.lastSeen && (Date.now() - new Date(a.lastSeen).getTime() < 120000) ? 1 : 0;
+                            const bOnline = b.lastSeen && (Date.now() - new Date(b.lastSeen).getTime() < 120000) ? 1 : 0;
+                            return bOnline - aOnline;
+                          })
+                          .map(m => {
+                            const savings = Math.max(getMemberApprovedSavings(m.userId), getMemberApprovedSavings(m.id));
+                            const sharesCount = savings / (chama.sharePrice || 2000);
+                            const required = (parseFloat(amount) || 0) / 3;
+                            const hasEnough = !required || savings >= required;
+                            const isOnline = m.lastSeen && (Date.now() - new Date(m.lastSeen).getTime() < 120000);
+
+                            return (
+                              <option key={m.id} value={m.id} disabled={!hasEnough}>
+                                {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                              </option>
+                            );
+                          })}
                       </select>
                     </div>
 
@@ -910,14 +1104,29 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                         required
                         value={guarantor3}
                         onChange={(e) => setGuarantor3(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
                       >
                         <option value="">-- Select Co-signer 3 --</option>
                         {members
-                          .filter(m => m.id !== currentUserId && m.id !== guarantor1 && m.id !== guarantor2)
-                          .map(m => (
-                            <option key={m.id} value={m.id}>{m.name} ({m.role})</option>
-                          ))}
+                          .filter(m => m.id !== currentUserId && m.userId !== currentUserId && m.id !== guarantor1 && m.id !== guarantor2)
+                          .sort((a, b) => {
+                            const aOnline = a.lastSeen && (Date.now() - new Date(a.lastSeen).getTime() < 120000) ? 1 : 0;
+                            const bOnline = b.lastSeen && (Date.now() - new Date(b.lastSeen).getTime() < 120000) ? 1 : 0;
+                            return bOnline - aOnline;
+                          })
+                          .map(m => {
+                            const savings = Math.max(getMemberApprovedSavings(m.userId), getMemberApprovedSavings(m.id));
+                            const sharesCount = savings / (chama.sharePrice || 2000);
+                            const required = (parseFloat(amount) || 0) / 3;
+                            const hasEnough = !required || savings >= required;
+                            const isOnline = m.lastSeen && (Date.now() - new Date(m.lastSeen).getTime() < 120000);
+
+                            return (
+                              <option key={m.id} value={m.id} disabled={!hasEnough}>
+                                {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                              </option>
+                            );
+                          })}
                       </select>
                     </div>
                   </div>

@@ -134,8 +134,8 @@ export default function ChamaSelector({ currentUser, onChamaSelected }: ChamaSel
   };
 
   const filteredChamas = chamas.filter((chama) =>
-    chama.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    chama.description.toLowerCase().includes(searchQuery.toLowerCase())
+    (chama.name || "").toLowerCase().includes((searchQuery || "").toLowerCase()) ||
+    (chama.description || "").toLowerCase().includes((searchQuery || "").toLowerCase())
   );
 
   return (

@@ -751,8 +751,8 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
     const matchesStatus = statusFilter === "all" || c.status === statusFilter;
     
     // Member name search filter (case-insensitive)
-    const matchesSearch = !searchMemberQuery.trim() || 
-      (c.memberName && c.memberName.toLowerCase().includes(searchMemberQuery.toLowerCase()));
+    const matchesSearch = !(searchMemberQuery || "").trim() || 
+      (c.memberName && c.memberName.toLowerCase().includes((searchMemberQuery || "").toLowerCase()));
       
     // Date range filter
     let matchesDateRange = true;
