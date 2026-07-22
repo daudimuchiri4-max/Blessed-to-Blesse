@@ -29,7 +29,8 @@ import {
   Check,
   Bell,
   BellOff,
-  Wifi
+  Wifi,
+  Timer
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -103,6 +104,11 @@ export default function App() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Idle Auto Sign-Out State (5 minutes = 300 seconds)
+  const lastActivityRef = useRef<number>(Date.now());
+  const [showIdleWarningModal, setShowIdleWarningModal] = useState(false);
+  const [idleSecondsRemaining, setIdleSecondsRemaining] = useState(30);
 
   // Reset financial data state
   const [resetConfirmInput, setResetConfirmInput] = useState("");
@@ -607,7 +613,54 @@ export default function App() {
     localStorage.removeItem("chama_bypass_user");
     setUser(null);
     setSelectedChama(null);
+    setShowIdleWarningModal(false);
     await signOut(auth);
+  };
+
+  // Auto sign-out after 5 minutes (300 seconds) of inactivity
+  useEffect(() => {
+    if (!user) {
+      setShowIdleWarningModal(false);
+      return;
+    }
+
+    lastActivityRef.current = Date.now();
+
+    const resetActivity = () => {
+      lastActivityRef.current = Date.now();
+      setShowIdleWarningModal((prev) => (prev ? false : prev));
+    };
+
+    const activityEvents = ["mousemove", "keydown", "mousedown", "touchstart", "scroll", "click"];
+    activityEvents.forEach((evt) => window.addEventListener(evt, resetActivity, { passive: true }));
+
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes = 300,000 ms
+    const WARNING_THRESHOLD_MS = 4.5 * 60 * 1000; // 4.5 minutes = 270,000 ms
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+
+      if (elapsed >= IDLE_TIMEOUT_MS) {
+        setShowIdleWarningModal(false);
+        handleLogout();
+      } else if (elapsed >= WARNING_THRESHOLD_MS) {
+        const remaining = Math.max(1, Math.ceil((IDLE_TIMEOUT_MS - elapsed) / 1000));
+        setIdleSecondsRemaining(remaining);
+        setShowIdleWarningModal(true);
+      } else {
+        setShowIdleWarningModal((prev) => (prev ? false : prev));
+      }
+    }, 1000);
+
+    return () => {
+      activityEvents.forEach((evt) => window.removeEventListener(evt, resetActivity));
+      clearInterval(interval);
+    };
+  }, [user]);
+
+  const handleExtendSession = () => {
+    lastActivityRef.current = Date.now();
+    setShowIdleWarningModal(false);
   };
 
   const handleSaveGroupSettings = async (e: React.FormEvent) => {
@@ -1657,6 +1710,56 @@ export default function App() {
                   className="bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 text-white px-4 py-2 rounded-xl text-xs font-bold cursor-pointer disabled:cursor-not-allowed transition-colors"
                 >
                   {resettingData ? "Resetting Fresh..." : "Confirm Reset & Start Fresh"}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 5-Minute Inactivity Session Timeout Warning Modal */}
+      <AnimatePresence>
+        {showIdleWarningModal && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 space-y-4 relative text-slate-200 shadow-2xl"
+            >
+              <div className="flex items-center gap-2 text-amber-400 border-b border-amber-900/40 pb-3">
+                <Timer className="w-5 h-5 shrink-0 text-amber-400 animate-pulse" />
+                <h3 className="text-base font-bold text-white font-mono uppercase tracking-wide">Inactivity Timeout Warning</h3>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  You have been inactive for over 4.5 minutes. To safeguard your Chama account and financial records, you will be automatically signed out in:
+                </p>
+
+                <div className="py-3 px-4 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center gap-3">
+                  <Timer className="w-6 h-6 text-amber-400 shrink-0" />
+                  <span className="text-2xl font-mono font-bold text-amber-400 tracking-wider">
+                    00:{idleSecondsRemaining < 10 ? `0${idleSecondsRemaining}` : idleSecondsRemaining}
+                  </span>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="px-4 py-2 rounded-xl text-xs font-bold font-mono text-slate-400 hover:text-red-400 cursor-pointer transition-colors"
+                >
+                  Sign Out Now
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExtendSession}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-5 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-md shadow-emerald-950 flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>I'm Still Here (Extend Session)</span>
                 </button>
               </div>
             </motion.div>
