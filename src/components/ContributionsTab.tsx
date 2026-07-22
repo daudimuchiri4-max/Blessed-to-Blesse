@@ -506,19 +506,22 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
       const currentYear = today.getFullYear();
       const currentMonth = today.getMonth();
 
-      // Scan from the year the Chama was created, up to current year/month
-      const creationDate = chama.createdAt ? new Date(chama.createdAt) : new Date(2026, 0, 1);
-      const startYear = isNaN(creationDate.getTime()) ? 2026 : creationDate.getFullYear();
-      const startMonth = isNaN(creationDate.getTime()) ? 0 : creationDate.getMonth();
+      // Official deduction start date: 10th August 2026 (Month index 7 = August)
+      const officialStartDate = new Date(2026, 7, 10);
+      if (today < officialStartDate) {
+        // System will officially start deducting money starting 10th August 2026
+        return;
+      }
 
-      let y = startYear;
-      let m = startMonth;
+      // Start scanning from August 2026 (2026, Month 7)
+      let y = 2026;
+      let m = 7; // August
 
       while (y < currentYear || (y === currentYear && m <= currentMonth)) {
         const tenthOfThatMonth = new Date(y, m, 10);
         
-        // If today is on or past the 10th of this month, we verify compliance
-        if (today >= tenthOfThatMonth) {
+        // If today is on or past the 10th of this month (and month is on or after Aug 10, 2026), verify compliance
+        if (tenthOfThatMonth >= officialStartDate && today >= tenthOfThatMonth) {
           for (const member of members) {
             const memberId = member.userId || member.id;
             
@@ -807,13 +810,13 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
           <Sparkles className="w-5 h-5 text-amber-500 shrink-0 mt-0.5 animate-pulse" />
           <div className="space-y-1.5 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-bold text-slate-200">10th Monthly Auto-Deduction Rule is ACTIVE</span>
+              <span className="font-bold text-slate-200">10th Monthly Auto-Deduction Rule</span>
               <span className="text-[9px] font-mono font-bold bg-amber-500/15 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded uppercase">
-                COOPERATIVE LAW ENFORCED
+                STARTS 10TH AUGUST 2026
               </span>
             </div>
             <p className="leading-relaxed">
-              If members miss their monthly agreed savings contribution (<strong>{chama.contributionAmount.toLocaleString()} {chama.currency}</strong>) by the <strong>10th of any month</strong>, the outstanding shortfall will be automatically deducted from their existing shares (savings pool) and recorded as a compliant transaction.
+              The system will officially start deducting money automatically starting <strong>10th August 2026</strong>. If members miss their monthly agreed savings contribution (<strong>{chama.contributionAmount.toLocaleString()} {chama.currency}</strong>) by the <strong>10th of any month</strong>, the outstanding shortfall will be automatically deducted from their existing shares (savings pool) and recorded as a compliant transaction.
             </p>
           </div>
         </div>
