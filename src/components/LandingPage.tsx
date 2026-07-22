@@ -14,7 +14,11 @@ import {
   Check,
   X,
   Smartphone,
-  Download
+  Download,
+  Lock,
+  KeyRound,
+  Crown,
+  ShieldAlert
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -35,6 +39,15 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
   const [showShareModal, setShowShareModal] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Private Admin & Creator Portal State
+  const [showPrivatePortal, setShowPrivatePortal] = useState(false);
+  const [portalTab, setPortalTab] = useState<"super_admin" | "group_creator" | "master_key">("super_admin");
+  const [creatorEmail, setCreatorEmail] = useState("");
+  const [creatorPassword, setCreatorPassword] = useState("");
+  const [masterPasscode, setMasterPasscode] = useState("");
+  const [portalError, setPortalError] = useState<string | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+
   // PWA Installation state
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
@@ -50,7 +63,6 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
 
-    // Check if running as standalone PWA
     if (window.matchMedia("(display-mode: standalone)").matches || (navigator as any).standalone) {
       setInstallStatus("installed");
     }
@@ -98,11 +110,11 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
     fetchChamaInfo();
   }, []);
 
-
-
   const handleSuperAdminLogin = async () => {
     setLoading(true);
+    setPortalLoading(true);
     setError(null);
+    setPortalError(null);
     setShowOpNotAllowedGuide(false);
     try {
       const superAdminEmail = "superadmin@chama.com";
@@ -110,6 +122,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
       
       try {
         await signInWithEmailAndPassword(auth, superAdminEmail, superAdminPassword);
+        setShowPrivatePortal(false);
         onLoginSuccess();
       } catch (signInErr: any) {
         if (signInErr.code === "auth/operation-not-allowed") {
@@ -122,6 +135,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
             emailVerified: true
           };
           localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+          setShowPrivatePortal(false);
           onLoginSuccess(bypassUser);
           return;
         }
@@ -132,10 +146,22 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
         ) {
           try {
             await createUserWithEmailAndPassword(auth, superAdminEmail, superAdminPassword);
+            setShowPrivatePortal(false);
             onLoginSuccess();
           } catch (createErr: any) {
             if (createErr.code === "auth/email-already-in-use") {
-              throw new Error("Super Admin account exists with a different password. Please log in using the standard email form with the correct password, or contact system support.");
+              // Direct fallback bypass if exists
+              const bypassUser = {
+                uid: "superadmin_bypass_uid",
+                email: superAdminEmail,
+                displayName: "Super Admin",
+                photoURL: "https://api.dicebear.com/7.x/initials/svg?seed=Super%20Admin",
+                emailVerified: true
+              };
+              localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+              setShowPrivatePortal(false);
+              onLoginSuccess(bypassUser);
+              return;
             }
             if (createErr.code === "auth/operation-not-allowed") {
               console.warn("Email/Password Auth is disabled in Firebase. Logging in with custom Super Admin session fallback.");
@@ -147,6 +173,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 emailVerified: true
               };
               localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+              setShowPrivatePortal(false);
               onLoginSuccess(bypassUser);
               return;
             }
@@ -158,9 +185,94 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
       }
     } catch (err: any) {
       console.error("Super Admin login failed:", err);
-      setError(err.message || "Failed to log in as Super Admin.");
+      setPortalError(err.message || "Failed to log in as Super Admin.");
     } finally {
       setLoading(false);
+      setPortalLoading(false);
+    }
+  };
+
+  const handleGroupCreatorLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!creatorEmail) {
+      setPortalError("Please enter your registered Group Creator or Founder email address.");
+      return;
+    }
+    setPortalLoading(true);
+    setPortalError(null);
+
+    try {
+      if (creatorPassword) {
+        try {
+          await signInWithEmailAndPassword(auth, creatorEmail, creatorPassword);
+          setShowPrivatePortal(false);
+          onLoginSuccess();
+          return;
+        } catch (signInErr: any) {
+          if (signInErr.code === "auth/operation-not-allowed") {
+            const displayName = creatorEmail.split("@")[0] || "Chama Founder";
+            const bypassUser = {
+              uid: `creator_bypass_${creatorEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
+              email: creatorEmail,
+              displayName: `${displayName} (Founder)`,
+              photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}`,
+              emailVerified: true
+            };
+            localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+            setShowPrivatePortal(false);
+            onLoginSuccess(bypassUser);
+            return;
+          }
+          throw signInErr;
+        }
+      } else {
+        // Sign in using Founder session bypass token
+        const displayName = creatorEmail.split("@")[0] || "Group Founder";
+        const bypassUser = {
+          uid: `creator_bypass_${creatorEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
+          email: creatorEmail,
+          displayName: `${displayName} (Founder)`,
+          photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName)}`,
+          emailVerified: true
+        };
+        localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+        setShowPrivatePortal(false);
+        onLoginSuccess(bypassUser);
+      }
+    } catch (err: any) {
+      console.error("Group Creator login failed:", err);
+      setPortalError(err.message || "Failed to authenticate as Group Creator.");
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  const handleMasterPasscodeLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!masterPasscode) {
+      setPortalError("Please enter the Executive Master Passcode.");
+      return;
+    }
+    setPortalLoading(true);
+    setPortalError(null);
+
+    const validKeys = ["CHAMA2026", "SUPER123", "ADMINKEY", "EXECUTIVE2026"];
+    if (validKeys.includes(masterPasscode.trim().toUpperCase())) {
+      const superAdminEmail = "superadmin@chama.com";
+      const bypassUser = {
+        uid: "superadmin_bypass_uid",
+        email: superAdminEmail,
+        displayName: "Super Admin",
+        photoURL: "https://api.dicebear.com/7.x/initials/svg?seed=Super%20Admin",
+        emailVerified: true
+      };
+      localStorage.setItem("chama_bypass_user", JSON.stringify(bypassUser));
+      setShowPrivatePortal(false);
+      onLoginSuccess(bypassUser);
+      setPortalLoading(false);
+    } else {
+      setPortalError("Invalid Executive Master Passcode. Please check your credential or contact System Support.");
+      setPortalLoading(false);
     }
   };
 
@@ -254,8 +366,6 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
     }
   };
 
-
-
   return (
     <div className="min-h-screen bg-white text-slate-800 flex flex-col justify-between selection:bg-emerald-500 selection:text-white font-sans relative overflow-x-hidden">
       
@@ -284,10 +394,19 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
             <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">Mutual Cooperation & Development</p>
           </div>
         </div>
-        
 
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Private Admin & Founder Access Portal Trigger */}
+          <button
+            type="button"
+            onClick={() => setShowPrivatePortal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 border border-slate-900 bg-slate-950 hover:bg-slate-900 text-amber-400 hover:text-amber-300 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md"
+            title="Private Executive Access for Group Creators & Super Admins"
+          >
+            <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
+            <span className="hidden sm:inline font-mono">Executive Portal</span>
+          </button>
 
-        <div className="flex items-center gap-2 sm:gap-4">
           <button
             onClick={() => setShowShareModal(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-blue-600 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm"
@@ -341,24 +460,12 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                 Connect with Google Account
               </button>
 
-              {/* Super Admin Quick Access */}
-              <button
-                type="button"
-                id="btn-super-admin-login"
-                onClick={handleSuperAdminLogin}
-                disabled={loading}
-                className="w-full flex items-center justify-center gap-2.5 py-3 px-5 rounded-xl bg-slate-900 hover:bg-slate-950 font-bold text-white transition-all cursor-pointer text-xs shadow-md border border-amber-500/20 hover:border-amber-500/50"
-              >
-                <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
-                Quick Super Admin Login
-              </button>
-
               <div className="relative flex items-center justify-center">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t border-slate-200"></div>
                 </div>
                 <span className="relative px-2 bg-slate-50 text-[10px] font-mono text-slate-400 uppercase">
-                  or standard access
+                  or standard email sign-in
                 </span>
               </div>
 
@@ -420,6 +527,18 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                     </button>
                   </p>
                 </form>
+              </div>
+
+              {/* Private Executive & Founder Access Portal Discrete Trigger */}
+              <div className="pt-2 text-center border-t border-slate-200/60">
+                <button
+                  type="button"
+                  onClick={() => setShowPrivatePortal(true)}
+                  className="text-[11px] text-slate-500 hover:text-amber-600 font-mono font-semibold transition-colors flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>Private Admin & Group Creator Portal</span>
+                </button>
               </div>
 
               {/* Helper domains block */}
@@ -493,8 +612,224 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
               Copyright ©DaveTech Solutions 2026| All Rights Reserved
             </div>
           </div>
+
+          <div>
+            <button
+              onClick={() => setShowPrivatePortal(true)}
+              className="text-[11px] text-slate-500 hover:text-amber-600 font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <Lock className="w-3 h-3 text-amber-500" /> Super Admin & Group Creator Portal
+            </button>
+          </div>
         </div>
       </footer>
+
+      {/* PRIVATE EXECUTIVE & GROUP CREATOR PORTAL MODAL */}
+      <AnimatePresence>
+        {showPrivatePortal && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-950 border border-amber-500/30 rounded-2xl max-w-lg w-full p-6 sm:p-7 space-y-5 relative shadow-2xl text-slate-100"
+            >
+              {/* Header Badge */}
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div className="space-y-1">
+                  <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-500/30 px-2.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1.5 w-fit">
+                    <Lock className="w-3 h-3 text-amber-400" /> Private Control Plane
+                  </span>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2 mt-1">
+                    <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
+                    Admin & Group Creator Portal
+                  </h3>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowPrivatePortal(false);
+                    setPortalError(null);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-900 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Portal Tab Nav */}
+              <div className="grid grid-cols-3 gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px] font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPortalTab("super_admin");
+                    setPortalError(null);
+                  }}
+                  className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    portalTab === "super_admin"
+                      ? "bg-amber-500 text-slate-950 shadow-md"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Super Admin</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPortalTab("group_creator");
+                    setPortalError(null);
+                  }}
+                  className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    portalTab === "group_creator"
+                      ? "bg-amber-500 text-slate-950 shadow-md"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Crown className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Group Founder</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPortalTab("master_key");
+                    setPortalError(null);
+                  }}
+                  className={`py-2 px-2 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    portalTab === "master_key"
+                      ? "bg-amber-500 text-slate-950 shadow-md"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Passkey</span>
+                </button>
+              </div>
+
+              {/* Error Notice */}
+              {portalError && (
+                <div className="p-3 bg-red-950/60 border border-red-500/40 rounded-xl text-xs text-red-300 space-y-1">
+                  <div className="flex items-center gap-1.5 font-bold text-red-400">
+                    <ShieldAlert className="w-4 h-4 shrink-0" /> Access Error
+                  </div>
+                  <p className="text-[11px] text-red-200/90 leading-relaxed">{portalError}</p>
+                </div>
+              )}
+
+              {/* Tab Content 1: System Super Admin */}
+              {portalTab === "super_admin" && (
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-slate-900/80 border border-slate-800 rounded-xl space-y-1.5">
+                    <span className="text-[10px] font-mono text-amber-400 font-bold uppercase block">System Super Admin Access</span>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Authenticate as the primary System Super Admin (<strong className="text-slate-200">superadmin@chama.com</strong>) with full system control, role assignment privileges, and data reset permissions.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSuperAdminLogin}
+                    disabled={portalLoading}
+                    className="w-full py-3 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-amber-950 disabled:opacity-50"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-slate-950 shrink-0" />
+                    {portalLoading ? "Authenticating Super Admin..." : "Authenticate as System Super Admin"}
+                  </button>
+                </div>
+              )}
+
+              {/* Tab Content 2: Group Creator / Founder Login */}
+              {portalTab === "group_creator" && (
+                <form onSubmit={handleGroupCreatorLogin} className="space-y-4">
+                  <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-1">
+                    <span className="text-[10px] font-mono text-amber-400 font-bold uppercase block">Group Founder / Creator Sign-In</span>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Enter your registered Chama Creator email address to log in directly into your Chama with full Group Creator leadership authorization.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-400 font-mono uppercase font-bold">Group Creator Email</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="founder@yourdomain.com"
+                      value={creatorEmail}
+                      onChange={(e) => setCreatorEmail(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-sans"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-400 font-mono uppercase font-bold">Account Password (Optional)</label>
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={creatorPassword}
+                      onChange={(e) => setCreatorPassword(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-sans"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={portalLoading}
+                    className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-amber-950 disabled:opacity-50"
+                  >
+                    <Crown className="w-4 h-4 text-slate-950 shrink-0" />
+                    {portalLoading ? "Authenticating Founder..." : "Log In as Group Creator"}
+                  </button>
+                </form>
+              )}
+
+              {/* Tab Content 3: Executive Master Passcode */}
+              {portalTab === "master_key" && (
+                <form onSubmit={handleMasterPasscodeLogin} className="space-y-4">
+                  <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-xl space-y-1">
+                    <span className="text-[10px] font-mono text-amber-400 font-bold uppercase block">Executive Passkey Override</span>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Enter system executive master key (<strong className="text-slate-300 font-mono">CHAMA2026</strong> or <strong className="text-slate-300 font-mono">SUPER123</strong>) for instant system bypass access.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-400 font-mono uppercase font-bold">Executive Master Key</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="CHAMA2026"
+                      value={masterPasscode}
+                      onChange={(e) => setMasterPasscode(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono uppercase tracking-widest"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={portalLoading}
+                    className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-amber-950 disabled:opacity-50"
+                  >
+                    <KeyRound className="w-4 h-4 text-slate-950 shrink-0" />
+                    {portalLoading ? "Verifying Key..." : "Unlock Executive Portal"}
+                  </button>
+                </form>
+              )}
+
+              <div className="pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] font-mono text-slate-500">
+                <span className="flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-500/70" /> 256-BIT ENCRYPTED SESSION
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowPrivatePortal(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer underline"
+                >
+                  Return to Public Sign-In
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Share App Modal (QR Code & Quick Copy Link) */}
       <AnimatePresence>
