@@ -53,6 +53,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
 
   const isAdmin = memberRole === "super_admin" || memberRole === "chairperson" || chama.createdBy === currentUserId;
   const isAuthorizedOfficial = isAdmin || memberRole === "treasurer";
+  const isOfficer = isAuthorizedOfficial || (memberRole && ["secretary", "vice_chairperson"].includes(memberRole));
   const isChairperson = memberRole === "chairperson" || memberRole === "super_admin" || chama.createdBy === currentUserId;
   const isTreasurer = memberRole === "treasurer" || memberRole === "super_admin" || chama.createdBy === currentUserId;
 
@@ -231,17 +232,29 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
     const g3Savings = Math.max(getMemberApprovedSavings(selectedG3.userId), getMemberApprovedSavings(selectedG3.id));
 
     if (g1Savings < requiredGuaranteePerCoSigner) {
-      setError(`Co-signer "${selectedG1.name}" has insufficient shares. They have ${g1Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      if (isOfficer) {
+        setError(`Co-signer "${selectedG1.name}" has insufficient shares. They have ${g1Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      } else {
+        setError(`Co-signer "${selectedG1.name}" has insufficient shares to guarantee this loan. Each co-signer must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} in shares/savings.`);
+      }
       return;
     }
 
     if (g2Savings < requiredGuaranteePerCoSigner) {
-      setError(`Co-signer "${selectedG2.name}" has insufficient shares. They have ${g2Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      if (isOfficer) {
+        setError(`Co-signer "${selectedG2.name}" has insufficient shares. They have ${g2Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      } else {
+        setError(`Co-signer "${selectedG2.name}" has insufficient shares to guarantee this loan. Each co-signer must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} in shares/savings.`);
+      }
       return;
     }
 
     if (g3Savings < requiredGuaranteePerCoSigner) {
-      setError(`Co-signer "${selectedG3.name}" has insufficient shares. They have ${g3Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      if (isOfficer) {
+        setError(`Co-signer "${selectedG3.name}" has insufficient shares. They have ${g3Savings.toLocaleString()} ${chama.currency} in savings, but must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} (1/3 of your ${principal.toLocaleString()} ${chama.currency} loan) to guarantee.`);
+      } else {
+        setError(`Co-signer "${selectedG3.name}" has insufficient shares to guarantee this loan. Each co-signer must have at least ${requiredGuaranteePerCoSigner.toLocaleString()} ${chama.currency} in shares/savings.`);
+      }
       return;
     }
 
@@ -914,6 +927,24 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                     const mySavings = getMemberApprovedSavings(currentUserId);
                     const myShares = mySavings / (chama.sharePrice || 2000);
                     const maxLoan = mySavings * 3;
+
+                    if (mySavings <= 0) {
+                      return (
+                        <div className="p-3.5 bg-amber-950/40 border border-amber-500/40 rounded-xl space-y-1.5 text-xs text-amber-300">
+                          <div className="flex items-center gap-2 font-bold text-amber-400">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                            <span>Ineligible for Loan: 0 Shares Owned</span>
+                          </div>
+                          <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                            You do not currently own any shares in this Chama. Under cooperative credit rules, a member must have approved shares/savings to qualify for a loan (maximum loan limit is 3x your total shares value).
+                          </p>
+                          <p className="text-[11px] text-emerald-400 font-semibold pt-0.5">
+                            💡 Tip: Go to the <span className="underline font-mono">Contributions</span> tab to deposit savings and buy shares!
+                          </p>
+                        </div>
+                      );
+                    }
+
                     return (
                       <div className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-1 text-xs">
                         <div className="flex justify-between items-center text-[10px] font-mono text-slate-500 uppercase tracking-wider">
@@ -1068,7 +1099,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
 
                               return (
                                 <option key={m.id} value={m.id} disabled={!hasEnough}>
-                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) {isOfficer ? `— ${sharesCount.toFixed(1)} Shares (${savings.toLocaleString()} ${chama.currency})` : ""} {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
                                 </option>
                               );
                             })}
@@ -1100,7 +1131,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
 
                               return (
                                 <option key={m.id} value={m.id} disabled={!hasEnough}>
-                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) {isOfficer ? `— ${sharesCount.toFixed(1)} Shares (${savings.toLocaleString()} ${chama.currency})` : ""} {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
                                 </option>
                               );
                             })}
@@ -1132,7 +1163,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
 
                               return (
                                 <option key={m.id} value={m.id} disabled={!hasEnough}>
-                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) — {sharesCount.toFixed(1)} Shares ({savings.toLocaleString()} {chama.currency}) {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
+                                  {isOnline ? "🟢 [ONLINE NOW] " : "⚪ "}{m.name} ({m.role}) {isOfficer ? `— ${sharesCount.toFixed(1)} Shares (${savings.toLocaleString()} ${chama.currency})` : ""} {!hasEnough ? " ❌ (Insufficient shares)" : " ✓ Eligible"}
                                 </option>
                               );
                             })}
@@ -1167,10 +1198,10 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
                   </button>
                   <button
                     type="submit"
-                    disabled={submitting}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-slate-950 px-5 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-md shadow-emerald-950"
+                    disabled={submitting || getMemberApprovedSavings(currentUserId) <= 0}
+                    className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 px-5 py-2 rounded-xl text-xs font-bold cursor-pointer disabled:cursor-not-allowed transition-colors shadow-md shadow-emerald-950"
                   >
-                    {submitting ? "Requesting..." : "Submit Application"}
+                    {submitting ? "Requesting..." : getMemberApprovedSavings(currentUserId) <= 0 ? "Ineligible (0 Shares)" : "Submit Application"}
                   </button>
                 </div>
               </form>

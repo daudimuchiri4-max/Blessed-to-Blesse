@@ -184,11 +184,13 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
       .reduce((sum, c) => sum + c.amount, 0);
   };
 
+  const isOfficer = (memberRole && ["super_admin", "chairperson", "secretary", "vice_chairperson", "treasurer"].includes(memberRole)) || chama.createdBy === currentUserId;
+
   // Filtered list of automatic deductions (debits) from shares
   const autoDeductions = contributions.filter((c) => {
     const isAuto = c.notes && c.notes.includes("Automatic deduction") && c.amount < 0;
     if (!isAuto) return false;
-    if (memberRole === "member" && c.userId !== currentUserId) {
+    if (!isOfficer && c.userId !== currentUserId) {
       return false;
     }
     return true;
@@ -744,7 +746,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
 
   const filteredContributions = contributions.filter((c) => {
     // Regular members can only view their own contributions
-    if (memberRole === "member" && c.userId !== currentUserId) {
+    if (!isOfficer && c.userId !== currentUserId) {
       return false;
     }
     const matchesType = typeFilter === "all" || c.type === typeFilter;
@@ -920,7 +922,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                   // Calculate compliance for this day if it is a due date
                   let statusSummary = null;
                   if (isCellDue && members.length > 0) {
-                    const visibleMembersForCal = memberRole === "member"
+                    const visibleMembersForCal = !isOfficer
                       ? members.filter(m => m.id === currentUserId || m.userId === currentUserId)
                       : members;
                     const stats = visibleMembersForCal.map(m => getMemberPaymentStatusForDueDate(m.id, cellDate, chama.frequency, contributions));
@@ -1011,7 +1013,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
             </div>
 
             {selectedDueDate ? (() => {
-              const visibleMembersList = memberRole === "member"
+              const visibleMembersList = !isOfficer
                 ? members.filter(m => m.id === currentUserId || m.userId === currentUserId)
                 : members;
               const stats = visibleMembersList.map(m => {

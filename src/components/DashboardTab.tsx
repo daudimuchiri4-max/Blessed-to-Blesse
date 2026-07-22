@@ -112,7 +112,8 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
     };
   }, [chama.id, currentUserId]);
 
-  const isRegularMember = myMemberRecord?.role === "member";
+  const isOfficer = (myMemberRecord && ["super_admin", "chairperson", "secretary", "vice_chairperson", "treasurer"].includes(myMemberRecord.role)) || chama.createdBy === currentUserId;
+  const isRegularMember = !isOfficer;
 
   // Aggregate user's personal contributions
   const myTotalApproved = allContributions
@@ -565,10 +566,15 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
                             </span>
                           </div>
 
-                          {(!isRegularMember || m.userId === currentUserId || m.id === currentUserId) && (
+                          {(!isRegularMember || m.userId === currentUserId || m.id === currentUserId) ? (
                             <div className="pt-2 border-t border-slate-900/50 flex justify-between items-center text-[10px] font-mono text-slate-500">
                               <span>Contribution: <strong className="text-slate-300">{(memberSavings).toLocaleString()} {chama.currency}</strong></span>
                               <span>Shares: <strong className="text-emerald-400">{memberShares.toFixed(1)}</strong></span>
+                            </div>
+                          ) : (
+                            <div className="pt-2 border-t border-slate-900/50 flex justify-between items-center text-[10px] font-mono text-slate-500">
+                              <span>Contribution & Shares:</span>
+                              <span className="text-[9px] bg-slate-900/60 px-1.5 py-0.5 rounded text-slate-500 uppercase font-bold tracking-wider">Confidential</span>
                             </div>
                           )}
                         </div>
