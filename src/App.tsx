@@ -101,7 +101,12 @@ export default function App() {
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Reset financial data state
+  const [resetConfirmInput, setResetConfirmInput] = useState("");
+  const [resettingData, setResettingData] = useState(false);
 
   // Group settings inputs
   const [groupName, setGroupName] = useState("");
@@ -626,6 +631,61 @@ export default function App() {
     }
   };
 
+  const handleResetFinancialData = async () => {
+    if (!selectedChama) return;
+    const userRole = memberRecord?.role || "member";
+    const isSuperAdmin = userRole === "super_admin" || selectedChama.createdBy === user?.uid || user?.email === "superadmin@chama.com";
+
+    if (!isSuperAdmin) {
+      alert("Access Denied: Only Super Admins are authorized to reset Chama financial records.");
+      return;
+    }
+
+    setResettingData(true);
+    try {
+      // 1. Delete all docs in contributions
+      const contribSnap = await getDocs(collection(db, "chamas", selectedChama.id, "contributions"));
+      const contribDeletes = contribSnap.docs.map((docSnap) => deleteDoc(doc(db, "chamas", selectedChama.id, "contributions", docSnap.id)));
+      await Promise.all(contribDeletes);
+
+      // 2. Delete all docs in loans
+      const loansSnap = await getDocs(collection(db, "chamas", selectedChama.id, "loans"));
+      const loansDeletes = loansSnap.docs.map((docSnap) => deleteDoc(doc(db, "chamas", selectedChama.id, "loans", docSnap.id)));
+      await Promise.all(loansDeletes);
+
+      // 3. Delete all docs in investments
+      const investSnap = await getDocs(collection(db, "chamas", selectedChama.id, "investments"));
+      const investDeletes = investSnap.docs.map((docSnap) => deleteDoc(doc(db, "chamas", selectedChama.id, "investments", docSnap.id)));
+      await Promise.all(investDeletes);
+
+      // 4. Reset Chama document totals to 0
+      await updateDoc(doc(db, "chamas", selectedChama.id), {
+        totalSavings: 0,
+        totalLoans: 0,
+        totalInvestments: 0,
+      });
+
+      // 5. Post notification
+      await createChamaNotification(
+        selectedChama.id,
+        {
+          type: "alert",
+          title: "Financial Records Reset",
+          message: `All member contributions, shares, loans, and investments for ${selectedChama.name} have been completely reset to zero to start fresh.`
+        }
+      );
+
+      setShowResetConfirmModal(false);
+      setShowGroupSettings(false);
+      setResetConfirmInput("");
+    } catch (err: any) {
+      console.error("Error resetting financial data:", err);
+      alert("Error resetting financial records: " + (err.message || String(err)));
+    } finally {
+      setResettingData(false);
+    }
+  };
+
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -721,6 +781,7 @@ export default function App() {
   const currentRole = memberRecord?.role || "member";
   const isLeader = currentRole === "super_admin" || currentRole === "chairperson" || currentRole === "vice_chairperson" || currentRole === "treasurer" || currentRole === "secretary" || selectedChama.createdBy === user?.uid;
   const isAdmin = currentRole === "super_admin" || currentRole === "chairperson" || selectedChama.createdBy === user?.uid;
+  const isSuperAdmin = currentRole === "super_admin" || selectedChama.createdBy === user?.uid || user?.email === "superadmin@chama.com";
 
   const activeOnlineMembers = allMembersList.filter((m) => {
     if (!m.lastSeen) return false;
@@ -1217,6 +1278,27 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Danger Zone: Reset Financial Records (Super Admin Only) */}
+                {isSuperAdmin && (
+                  <div className="pt-4 border-t border-slate-800 space-y-3">
+                    <div className="p-3 bg-red-950/20 border border-red-900/40 rounded-xl space-y-2">
+                      <label className="text-xs text-red-400 font-mono font-bold flex items-center gap-1.5">
+                        <Trash2 className="w-3.5 h-3.5" /> Danger Zone: Reset Financial Records (Super Admin)
+                      </label>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Wipe all contributions, shares, loans, and investments for <strong>{selectedChama.name}</strong> to restart bookkeeping from scratch.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowResetConfirmModal(true)}
+                        className="bg-red-950/80 hover:bg-red-900 border border-red-800/80 text-red-300 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Reset All Contributions, Shares & Loans
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="pt-4 border-t border-slate-800 flex justify-end gap-3">
                   <button
                     type="button"
@@ -1511,6 +1593,70 @@ export default function App() {
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl cursor-pointer transition-colors"
                 >
                   Close Audit
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Reset Financial Data Confirmation Modal */}
+      <AnimatePresence>
+        {showResetConfirmModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-red-900/60 rounded-2xl max-w-md w-full p-6 space-y-4 relative text-slate-200 shadow-2xl"
+            >
+              <div className="flex items-center gap-2 text-red-400 border-b border-red-900/40 pb-3">
+                <ShieldAlert className="w-5 h-5 shrink-0 text-red-500" />
+                <h3 className="text-base font-bold text-white font-mono uppercase tracking-wide">Reset Financial Records?</h3>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                This operation will permanently delete <strong className="text-white">all contributions, shares, savings, and loans</strong> for <strong className="text-white">{selectedChama?.name}</strong> and reset group balances to zero.
+              </p>
+
+              <div className="p-3 bg-amber-950/40 border border-amber-900/50 rounded-xl space-y-1">
+                <span className="text-[10px] font-mono text-amber-400 font-bold uppercase block">⚠ Start Fresh Confirmation</span>
+                <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                  All members will start clean with 0 KES savings, 0 shares, and 0 active loans.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400 font-mono">
+                  Type <span className="text-red-400 font-bold select-all font-mono">RESET</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={resetConfirmInput}
+                  onChange={(e) => setResetConfirmInput(e.target.value)}
+                  placeholder="RESET"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500 font-mono tracking-widest uppercase"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-800 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetConfirmModal(false);
+                    setResetConfirmInput("");
+                  }}
+                  className="px-4 py-2 text-xs font-mono text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={resetConfirmInput.trim().toUpperCase() !== "RESET" || resettingData}
+                  onClick={handleResetFinancialData}
+                  className="bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 text-white px-4 py-2 rounded-xl text-xs font-bold cursor-pointer disabled:cursor-not-allowed transition-colors"
+                >
+                  {resettingData ? "Resetting Fresh..." : "Confirm Reset & Start Fresh"}
                 </button>
               </div>
             </motion.div>
