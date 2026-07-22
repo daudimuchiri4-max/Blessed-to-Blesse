@@ -122,7 +122,7 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
 
   // Prepare chart data for savings over time
   // Group approved contributions by month-year
-  const approvedContribs = allContributions.filter((c) => c.status === "approved" && c.type === "savings");
+  const approvedContribs = allContributions.filter((c) => c.status === "approved" && (c.type === "savings" || c.type === "shares"));
   const sortedContribs = [...approvedContribs].sort((a, b) => a.date.localeCompare(b.date));
 
   // Generate running cumulative totals by date
@@ -195,7 +195,7 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
       const bucket = months.find((m) => m.monthKey === cMonthKey);
       if (bucket) {
         bucket["Total Contributions"] += c.amount;
-        if (c.type === "savings") {
+        if (c.type === "savings" || c.type === "shares") {
           bucket["Total Savings"] += c.amount;
         }
       }
@@ -542,7 +542,7 @@ export default function DashboardTab({ chama, currentUserId, onTabChange }: Dash
                     )
                     .map((m) => {
                       const memberSavings = allContributions
-                        .filter((c) => (c.userId === m.userId || c.userId === m.id) && c.type === "savings" && c.status === "approved")
+                        .filter((c) => (c.userId === m.userId || c.userId === m.id) && (c.type === "savings" || c.type === "shares") && c.status === "approved")
                         .reduce((sum, c) => sum + c.amount, 0);
                       const memberShares = memberSavings / (chama.sharePrice || 2000);
 

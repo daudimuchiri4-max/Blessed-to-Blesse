@@ -488,7 +488,7 @@ export default function MembersTab({ chama, currentUserId, memberRole }: Members
 
                 {(() => {
                   const memberSavings = contributions
-                    .filter((c) => (c.userId === m.userId || c.userId === m.id) && c.type === "savings" && c.status === "approved")
+                    .filter((c) => (c.userId === m.userId || c.userId === m.id) && (c.type === "savings" || c.type === "shares") && c.status === "approved")
                     .reduce((sum, c) => sum + c.amount, 0);
                   const memberShares = memberSavings / (chama.sharePrice || 2000);
 

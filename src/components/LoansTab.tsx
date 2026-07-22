@@ -60,7 +60,7 @@ export default function LoansTab({ chama, currentUserId, memberRole, currentUser
   // Helper: get total approved savings contributions of a member
   const getMemberApprovedSavings = (userId: string) => {
     return contributions
-      .filter((c) => (c.userId === userId) && c.type === "savings" && c.status === "approved")
+      .filter((c) => (c.userId === userId) && (c.type === "savings" || c.type === "shares") && c.status === "approved")
       .reduce((sum, c) => sum + c.amount, 0);
   };
 

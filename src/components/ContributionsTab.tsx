@@ -180,7 +180,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
   // Helper: Get total approved savings contributions of a member
   const getMemberApprovedSavings = (userId: string) => {
     return contributions
-      .filter((c) => (c.userId === userId) && c.type === "savings" && c.status === "approved")
+      .filter((c) => (c.userId === userId) && (c.type === "savings" || c.type === "shares") && c.status === "approved")
       .reduce((sum, c) => sum + c.amount, 0);
   };
 
@@ -527,7 +527,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
               .filter((c) => {
                 if (c.userId !== memberId || c.status !== "approved" || c.amount <= 0) return false;
                 const cDate = new Date(c.date);
-                return cDate.getFullYear() === y && cDate.getMonth() === m && c.type === "savings";
+                return cDate.getFullYear() === y && cDate.getMonth() === m && (c.type === "savings" || c.type === "shares");
               })
               .reduce((sum, c) => sum + c.amount, 0);
 
@@ -1189,6 +1189,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                   >
                     <option value="all">All Types</option>
                     <option value="savings">Savings</option>
+                    <option value="shares">Shares / Buy Shares</option>
                     <option value="investment">Investment Pool</option>
                     <option value="loan_repayment">Loan Repayments</option>
                     <option value="fine">Fines</option>
@@ -1295,7 +1296,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                           <span>{c.type}</span>
                           <span>•</span>
                           <span>{new Date(c.date).toLocaleDateString()}</span>
-                          {c.type === "savings" && c.status === "approved" && (
+                          {(c.type === "savings" || c.type === "shares") && c.status === "approved" && (
                             <>
                               <span>•</span>
                               <span className={`font-bold font-mono px-1 py-0.5 rounded border ${
@@ -1552,6 +1553,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
                     >
                       <option value="savings">Regular Savings</option>
+                      <option value="shares">Share Capital / Buy Shares</option>
                       <option value="investment">Project Investment</option>
                       <option value="loan_repayment">Loan Repayment</option>
                       <option value="fine">Late Fee / Fine</option>
@@ -1664,6 +1666,7 @@ export default function ContributionsTab({ chama, currentUserId, memberRole, cur
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
                     >
                       <option value="savings">Regular Savings</option>
+                      <option value="shares">Share Capital / Buy Shares</option>
                       <option value="investment">Project Investment</option>
                       <option value="loan_repayment">Loan Repayment</option>
                       <option value="fine">Late Fee / Fine</option>

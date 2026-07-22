@@ -51,7 +51,7 @@ export interface Contribution {
   memberName: string;
   amount: number;
   date: string;
-  type: "savings" | "investment" | "loan_repayment" | "fine" | "other";
+  type: "savings" | "shares" | "investment" | "loan_repayment" | "fine" | "other";
   status: "pending" | "approved" | "rejected";
   notes: string;
   approvedBy?: string;
