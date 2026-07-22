@@ -386,7 +386,7 @@ export default function App() {
         const list: Member[] = [];
         snapshot.forEach((docSnap) => {
           const m = { id: docSnap.id, ...docSnap.data() } as Member;
-          if (!m.isPending && m.email !== "superadmin@chama.com") {
+          if (!m.isPending) {
             list.push(m);
           }
         });
@@ -725,7 +725,7 @@ export default function App() {
   const activeOnlineMembers = allMembersList.filter((m) => {
     if (!m.lastSeen) return false;
     const diffMs = Date.now() - new Date(m.lastSeen).getTime();
-    return diffMs < 2 * 60 * 1000; // active in last 2 minutes
+    return diffMs < 3 * 60 * 1000; // active in last 3 minutes
   });
 
   return (
@@ -774,13 +774,31 @@ export default function App() {
           {/* Live Online Badge Button */}
           <button
             onClick={() => setShowOnlineMembersModal(true)}
-            className="flex items-center gap-2 bg-emerald-950/80 border border-emerald-500/40 px-3 py-1.5 rounded-xl hover:bg-emerald-900/60 hover:border-emerald-400 transition-all cursor-pointer text-emerald-400 shrink-0 shadow-sm shadow-emerald-950"
-            title="Click to view live online cooperators"
+            className="flex items-center gap-2 bg-emerald-950/90 border border-emerald-500/50 px-3.5 py-1.5 rounded-xl hover:bg-emerald-900/80 hover:border-emerald-400 transition-all cursor-pointer text-emerald-400 shrink-0 shadow-md shadow-emerald-950/60 group"
+            title="Click for live presence directory"
           >
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[10px] font-mono font-extrabold uppercase">
-              {activeOnlineMembers.length} {activeOnlineMembers.length === 1 ? "ONLINE" : "ONLINE"}
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
             </span>
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-mono font-extrabold uppercase tracking-wide text-emerald-300">
+                {activeOnlineMembers.length} ONLINE
+              </span>
+              <div className="flex -space-x-1.5 overflow-hidden ml-0.5">
+                {activeOnlineMembers.slice(0, 3).map((m) => (
+                  <img
+                    key={m.id}
+                    src={m.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                    alt={m.name}
+                    title={`${m.name} (${m.role})`}
+                    referrerPolicy="no-referrer"
+                    className="inline-block h-5 w-5 rounded-full ring-2 ring-emerald-950 border border-emerald-400 object-cover"
+                  />
+                ))}
+              </div>
+            </div>
           </button>
 
           {/* Role badge */}
@@ -945,6 +963,47 @@ export default function App() {
 
         </div>
       </header>
+
+      {/* Live Online Cooperators Ribbon Bar */}
+      <div className="bg-slate-900/80 border-b border-slate-900/80 py-2 px-6 relative z-20 backdrop-blur-sm">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 overflow-x-auto py-0.5 scrollbar-none min-w-0">
+            <span className="flex items-center gap-1.5 text-emerald-400 font-extrabold text-[11px] font-mono uppercase shrink-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Who's Online ({activeOnlineMembers.length}):
+            </span>
+
+            {activeOnlineMembers.length === 0 ? (
+              <span className="text-slate-500 text-[11px] font-mono">No other members active right now</span>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                {activeOnlineMembers.map((m) => (
+                  <div
+                    key={m.id}
+                    className="inline-flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/30 px-2.5 py-1 rounded-full text-slate-200 text-[11px] font-medium hover:border-emerald-400 transition-all"
+                  >
+                    <img
+                      src={m.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                      alt={m.name}
+                      referrerPolicy="no-referrer"
+                      className="w-4 h-4 rounded-full object-cover border border-emerald-400 shrink-0"
+                    />
+                    <span className="font-semibold">{m.name}</span>
+                    <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold">({m.role})</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => setShowOnlineMembersModal(true)}
+            className="text-[10px] font-mono font-bold text-slate-400 hover:text-emerald-400 underline shrink-0 cursor-pointer transition-colors"
+          >
+            View Presence Directory &rarr;
+          </button>
+        </div>
+      </div>
 
       {/* Main Workspace Frame */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-6 py-8 flex flex-col gap-6">
